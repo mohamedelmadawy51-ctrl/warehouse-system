@@ -320,8 +320,31 @@ function startRealTimeSync(){
     const val=snap.val();
     if(val!==null){ DB.sectors=val; }
   });
+  FDB.ref(ROOT+'ift_labs').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){ DB.labs=val; }
+  });
+  FDB.ref(ROOT+'ift_counters').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){ DB.counters=val; }
+  });
+  FDB.ref(ROOT+'ift_labBalances').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){ DB.labBalances=val; }
+  });
+  FDB.ref(ROOT+'ift_counterBalances').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){ DB.counterBalances=val; }
+  });
 }
 function sname(code){const s=DB.sectors.find(x=>x.code===code);return s?s.name:'';}
+function lname(code){const l=DB.labs.find(x=>x.code===code);return l?l.name:'';}
+function cnname(code){const c=DB.counters.find(x=>x.code===code);return c?(c.name?c.code+' — '+c.name:c.code):'';}
+function labsForCustomer(ccode){return DB.labs.filter(l=>l.custCode===ccode);}
+// رصيد المعمل (بعد الصرف): مفتاحه معمل|صنف|باتش تماماً زي رصيد المخزن لكن بكود المعمل بدل كود العميل
+function glb(labCode,icode,batch){return DB.labBalances[bk(labCode,icode,batch)]||0;}
+// رصيد الكونتر: بالمخزن (location='WH') أو عند معمل معيّن (location=labCode)
+function cbal(location,code){return DB.counterBalances[location+'|'+code]||0;}
 
 /* ===== تحديد اسم المنطقة من الإحداثيات (لخريطة أكثر المناطق زيارة) ===== */
 const AREA_CACHE=JSON.parse(localStorage.getItem('ift_area_cache')||'{}');
@@ -344,7 +367,7 @@ async function resolveAreaNames(coordsList){
 }
 function uid(p){return p+'-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);}
 
-let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[]};
+let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{}};
 
 /* ============================================================
    نظام الخلفيات الديناميكية — IFT Veterinary
@@ -572,11 +595,19 @@ async function loadDB(){
   DB.orders=await dbGet('ift_orders',[]);
   DB.balances=await dbGet('ift_balances',{});
   DB.sectors=await dbGet('ift_sectors',[{code:'S1',name:'بيطري'},{code:'S2',name:'بشري'},{code:'S3',name:'أعلاف'}]);
+  DB.labs=await dbGet('ift_labs',[]);
+  DB.counters=await dbGet('ift_counters',[]);
+  DB.labBalances=await dbGet('ift_labBalances',{});
+  DB.counterBalances=await dbGet('ift_counterBalances',{});
 }
 async function svu(){await dbSet('ift_users',DB.users);}
 async function svc(){await dbSet('ift_customers',DB.customers);}
 async function svi(){await dbSet('ift_items',DB.items);}
 async function svs(){await dbSet('ift_sectors',DB.sectors);}
+async function svla(){await dbSet('ift_labs',DB.labs);}
+async function svco(){await dbSet('ift_counters',DB.counters);}
+async function svlb(){await dbSet('ift_labBalances',DB.labBalances);}
+async function svcb(){await dbSet('ift_counterBalances',DB.counterBalances);}
 async function svo(){await dbSet('ift_orders',DB.orders);await dbSet('ift_balances',DB.balances);}
 
 function findExpiry(cc,ic,batch){
@@ -605,7 +636,8 @@ function gb(c,i,b){
 const RLBL={admin:'مدير النظام',data_entry:'مدخل بيانات',accounts:'حسابات العملاء',cars:'السيارات',warehouse:'المخازن',rep:'مندوب توزيع'};
 const SLBL={draft:'مسودة',pending_accounts:'بانتظار الحسابات',rejected:'مرفوض',pending_cars:'بانتظار السيارات',pending_warehouse:'بانتظار المخازن',pending_rep:'بانتظار المندوب',with_rep:'مع المندوب',delivered:'تم التسليم',approved:'تم الاستلام بالمخزن ✅',
   return_pending_rep:'مرتجع — بانتظار تأكيد المندوب',return_pending_acc:'مرتجع — بانتظار الحسابات',return_pending_wh:'مرتجع — بانتظار استلام المخازن',returned:'تم تأكيد الإرجاع وإضافة الرصيد ✅',
-  customer_return_pending_acc:'سحب من عميل — بانتظار الحسابات',customer_return_pending_cars:'سحب من عميل — بانتظار السيارات',customer_return_pending_wh:'سحب من عميل — بانتظار تأكيد المخزن',customer_returned:'تم تأكيد السحب وإضافة الرصيد ✅'};
+  customer_return_pending_acc:'سحوبات — بانتظار الحسابات',customer_return_pending_cars:'سحوبات — بانتظار السيارات',customer_return_pending_wh:'سحوبات — بانتظار تأكيد المخزن',customer_returned:'تم تنفيذ السحوبات وخصم الرصيد ✅',
+  done:'تم التنفيذ ✅',counter_return_pending_wh:'كونتر — قيد الإرجاع للمخزن',counter_returned:'كونتر — تم الإرجاع للمخزن ✅'};
 // مسارات مختلفة حسب نوع الحركة
 const ADD_STEPS=[{l:'إدخال'},{l:'حسابات'},{l:'مخازن'}];
 const WD_STEPS=[{l:'إدخال'},{l:'حسابات'},{l:'سيارات'},{l:'مخازن'},{l:'مندوب'},{l:'تسليم'}];
@@ -765,7 +797,7 @@ function forRole(u){
     case 'data_entry':return DB.orders.filter(o=>o.cby===u.username);
     case 'accounts':return DB.orders.filter(o=>['pending_accounts','return_pending_acc','customer_return_pending_acc'].includes(o.stage));
     case 'cars':return DB.orders.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars');
-    case 'warehouse':return DB.orders.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh'].includes(o.stage));
+    case 'warehouse':return DB.orders.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage));
     case 'rep':return DB.orders.filter(o=>['pending_rep','with_rep','return_pending_rep'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username));
     case 'admin':return DB.orders;
     default:return[];
@@ -774,14 +806,17 @@ function forRole(u){
 
 function otitle(o){
   if(o.kind==='transfer')return`تحويل ${o.iname||o.icode||''}`;
+  if(o.kind==='lab_transfer')return`تحويل بين معامل — ${o.iname||o.icode||''}`;
+  if(o.kind==='counter_return')return`استرجاع كونتر ${o.counterCode||''}`;
+  if(o.kind==='consumption')return`استهلاك بالمعمل — ${o.iname||o.icode||''}`;
   if(o.kind==='return')return`إرجاع كمية متبقية — ${o.iname||o.icode||''}`;
-  if(o.kind==='customer_return')return`سحب من عميل — ${o.iname||o.icode||''}`;
+  if(o.kind==='customer_return')return`سحوبات — ${o.iname||o.icode||''}`;
   return(o.kind==='addition'?'إضافة — ':'صرف — ')+(o.iname||o.icode||'');
 }
 
 function rCard(o){
   const tc=o.kind==='addition'?'ta':o.kind==='withdrawal'?'tw':(o.kind==='return'||o.kind==='customer_return')?'tw':'tt';
-  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحب عميل':'تحويل';
+  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
   const sc=o.stage==='rejected'?'var(--bad)':(o.stage==='delivered'||o.stage==='approved'||o.stage==='returned'||o.stage==='customer_returned')?'var(--ok)':'var(--warn)';
   return `<div class="card" data-a="open" data-id="${o.id}">
     <div class="ch"><div><div class="ctitle">${otitle(o)}</div><div class="cmeta">${o.inv?'SO: '+o.inv+' · ':''}${o.cname||o.fcname||''}</div></div><span class="tag ${tc}">${tt}</span></div>
@@ -818,7 +853,7 @@ function rHome(){
   const groups=[
     {key:'accounts',l:'حسابات العملاء',ic:'🧾',stages:['pending_accounts','return_pending_acc','customer_return_pending_acc'],retStages:['return_pending_acc','customer_return_pending_acc'],roles:['admin','accounts']},
     {key:'cars',l:'السيارات',ic:'🚗',stages:['pending_cars','customer_return_pending_cars'],retStages:['customer_return_pending_cars'],roles:['admin','cars']},
-    {key:'warehouse',l:'المخازن',ic:'📦',stages:['pending_warehouse','return_pending_wh','customer_return_pending_wh'],retStages:['return_pending_wh','customer_return_pending_wh'],roles:['admin','warehouse']},
+    {key:'warehouse',l:'المخازن',ic:'📦',stages:['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'],retStages:['return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'],roles:['admin','warehouse']},
     {key:'rep',l:'المندوب',ic:'🧍',stages:['pending_rep','return_pending_rep'],retStages:['return_pending_rep'],roles:['admin','rep']},
   ];
   groups.forEach(g=>{
@@ -856,7 +891,9 @@ function rNew(){const t=S.ntype;return`
     <div class="segtog">
       <button data-a="stype" data-type="addition" class="${t==='addition'?'on':''}">إضافة أمانة</button>
       <button data-a="stype" data-type="withdrawal" class="${t==='withdrawal'?'on':''}">صرف للعميل</button>
+      <button data-a="stype" data-type="consumption" class="${t==='consumption'?'on':''}">استهلاك بالمعمل</button>
     </div>
+    ${t==='consumption'?`<form id="cnsf">${rConsF()}<button class="btn-primary" type="submit" style="margin-top:6px;">تسجيل الاستهلاك وخصم رصيد المعمل فوراً</button></form>`:`
     <form id="nf">
       ${t==='addition'?rAddF():rSubF()}
       <div class="slabel">المرفقات</div>
@@ -864,11 +901,73 @@ function rNew(){const t=S.ntype;return`
       <input type="file" id="atf" accept="image/*,.pdf,.doc,.docx" style="display:none;">
       <div id="atp"></div>
       <button class="btn-primary" type="submit" style="margin-top:6px;">${t==='addition'?'حفظ وإضافة للمخزن فوراً':'حفظ وإرسال للمراجعة'}</button>
-    </form>
+    </form>`}
   </div>`;}
 
+function rConsF(){return`
+  <div class="row2">
+    <div class="field"><label>كود العميل</label><input name="cc" id="ccc" required></div>
+    <div class="field"><label>الاسم</label><input name="cn" id="ccn" readonly></div>
+  </div>
+  <div id="cclk" class="lkname"></div>
+  <div class="field"><label>المعمل</label><select name="labCode" id="cslab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
+  <div class="row2">
+    <div class="field"><label>كود الصنف</label><input name="ic" id="cic" required></div>
+    <div class="field"><label>اسم الصنف</label><input name="iname" id="cin" readonly></div>
+  </div>
+  <div id="cilk" class="lkname"></div>
+  <div class="field"><label>التشغيلة / الباتش</label><input name="batch" id="cbatch" required></div>
+  <div id="cbalbx" class="balbox">اكتب بيانات العميل والمعمل والصنف والباتش لعرض الرصيد المتاح</div>
+  <div class="field"><label>الكمية المستهلكة</label><input name="qty" type="number" min="1" id="cqty" required></div>
+  <div class="field"><label>ملحوظة</label><textarea name="note" rows="2"></textarea></div>`;}
+
+function cbbl(){
+  const box=document.getElementById('cbalbx');if(!box)return;
+  const upd=()=>{
+    const cc=(document.getElementById('ccc')||{}).value?.trim();
+    const ic=(document.getElementById('cic')||{}).value?.trim();
+    const labSel=document.getElementById('cslab');
+    const lab=labSel?labSel.value:'';
+    const bv=(document.getElementById('cbatch')||{}).value?.trim()||'';
+    const qty=+(document.getElementById('cqty')||{}).value||0;
+    if(labSel){
+      const labs=labsForCustomer(cc);
+      const cur=labSel.value;
+      if(!cc||labs.length===0){labSel.innerHTML=`<option value="">${cc?'لا يوجد معامل لهذا العميل':'اكتب كود العميل أولاً...'}</option>`;}
+      else{labSel.innerHTML=`<option value="">اختر المعمل...</option>`+labs.map(l=>`<option value="${l.code}" ${l.code===cur?'selected':''}>${l.name}</option>`).join('');}
+    }
+    if(!cc||!lab||!ic||!bv){box.textContent='اكتب بيانات العميل والمعمل والصنف والباتش لعرض الرصيد المتاح';box.className='balbox';return;}
+    const bal=glb(lab,ic,bv);
+    box.innerHTML=`الرصيد المتاح بالمعمل: <b style="color:${bal>0?'var(--ok)':'var(--bad)'}">${bal}</b>`;
+    box.className='balbox '+(bal<=0?'balbad':(qty>bal?'balbad':'balok'));
+  };
+  ['ccc','cic','cbatch','cqty'].forEach(id=>{const e=document.getElementById(id);if(e)e.addEventListener('input',upd);});
+  const labSel=document.getElementById('cslab');if(labSel)labSel.addEventListener('change',upd);
+  upd();
+}
+
+async function onConsume(e){
+  e.preventDefault();const f=new FormData(e.target),u=S.user;
+  const cc=f.get('cc')?.trim(),labCode=f.get('labCode')?.trim(),ic=f.get('ic')?.trim(),batch=f.get('batch')?.trim(),qty=+f.get('qty');
+  if(!labCode){toast('⛔ اختاري المعمل');return;}
+  const lab=DB.labs.find(l=>l.code===labCode);
+  if(!lab||lab.custCode!==cc){toast('⛔ هذا المعمل غير تابع لهذا العميل');return;}
+  const bal=glb(labCode,ic,batch);
+  if(bal<=0){toast('⛔ لا يوجد رصيد لهذا الصنف/الباتش بهذا المعمل');return;}
+  if(qty>bal){toast(`⛔ الكمية (${qty}) أكبر من الرصيد المتاح بالمعمل (${bal})`);return;}
+  const k=bk(labCode,ic,batch);
+  DB.labBalances[k]=bal-qty;
+  if(DB.labBalances[k]===0)delete DB.labBalances[k];
+  await svlb();
+  const o={id:uid('cs'),kind:'consumption',stage:'done',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
+    ccode:cc,cname:f.get('cn'),labCode,labName:lab.name,icode:ic,iname:f.get('iname'),batch,qty,note:f.get('note')};
+  DB.orders.push(o);await svo();
+  toast(`✅ تم تسجيل استهلاك ${qty} وخصمها من رصيد المعمل`);e.target.reset();render();
+}
+
 function rAddF(){return`
-  <div class="field"><label>رقم الأمر / SO</label><input name="inv" placeholder="SO26-00001" required></div>
+  <div class="field"><label>رقم الأمر / SO</label><input name="inv" id="ainv" placeholder="SO26-00001" required></div>
+  <div id="ainvchk" class="lkname"></div>
   <div class="row2">
     <div class="field"><label>كود العميل</label><input name="cc" id="acc" required></div>
     <div class="field"><label>اسم العميل</label><input name="cn" id="acn" readonly></div>
@@ -903,8 +1002,23 @@ function rSubF(){return`
   <div id="balbx" class="balbox">أدخل كود العميل والصنف لعرض الرصيد المتاح حالياً</div>
   <div id="batchlist"></div>
   <div class="field"><label>الكمية المطلوبة</label><input name="qty" type="number" min="1" id="sqty" required></div>
-  <div class="field"><label>اسم المعمل</label><input name="labName" required></div>
+  <div class="row2">
+    <div class="field"><label>معمل العميل</label><select name="labCode" id="slab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
+    <div class="field"><label>الكونتر / الدور</label><select name="counterCode" id="scounter">${DB.counters.length?`<option value="">بدون كونتر</option>`+DB.counters.map(c=>`<option value="${c.code}">${cnname(c.code)}</option>`).join(''):'<option value="">لا توجد كونترات مسجّلة</option>'}</select></div>
+  </div>
+  <div class="row2">
+    <div class="field"><label>هل يخرج الكونتر مع البضاعة للعميل؟</label><select name="counterWithGoods" id="scwg"><option value="yes">✅ نعم — يسلَّم مع البضاعة</option><option value="no">❌ لا — البضاعة فقط بدون الكونتر</option></select></div>
+    <div class="field"><label>عدد الكونترات</label><input name="counterQty" id="scqty" type="number" min="1" value="1"></div>
+  </div>
   <div class="field"><label>ملحوظة</label><textarea name="note" rows="2"></textarea></div>`;}
+
+function updateLabOptions(cc){
+  const sel=document.getElementById('slab');if(!sel)return;
+  const labs=labsForCustomer(cc);
+  const cur=sel.value;
+  if(!cc||labs.length===0){sel.innerHTML=`<option value="">${cc?'لا يوجد معامل مسجّلة لهذا العميل — أضيفي من الإدارة':'اكتب كود العميل أولاً...'}</option>`;return;}
+  sel.innerHTML=`<option value="">اختر معمل العميل...</option>`+labs.map(l=>`<option value="${l.code}" ${l.code===cur?'selected':''}>${l.name}</option>`).join('');
+}
 
 function updateBatchList(cc, ic, listElId, inputElId){
   listElId=listElId||'batchlist';inputElId=inputElId||'sbatch';
@@ -924,32 +1038,52 @@ function updateBatchList(cc, ic, listElId, inputElId){
   </div>`;
 }
 function rTr(){return`
-  <div class="stitle">تحويل بضاعة</div><div class="ssub">تحويل صنف من عميل/معمل لآخر</div>
+  <div class="stitle">تحويل بين المعامل</div><div class="ssub">تحويل بضاعة بين معملين تابعين لنفس العميل (بعد ما تكون اتصرفت فعلاً للعميل)</div>
   <div class="content"><form id="trf">
     <div class="row2">
-      <div class="field"><label>كود المُحوَّل منه</label><input name="fc" id="tfc" required></div>
-      <div class="field"><label>الاسم</label><input name="fn" id="tfn" readonly></div>
+      <div class="field"><label>كود العميل</label><input name="cc" id="tcc" required></div>
+      <div class="field"><label>الاسم</label><input name="cn" id="tcn" readonly></div>
     </div>
-    <div id="tflk" class="lkname"></div>
+    <div id="tclk" class="lkname"></div>
     <div class="row2">
-      <div class="field"><label>كود المُحوَّل إليه</label><input name="tc" id="ttc" required></div>
-      <div class="field"><label>الاسم</label><input name="tn" id="ttn" readonly></div>
+      <div class="field"><label>من معمل</label><select name="flab" id="tflab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
+      <div class="field"><label>إلى معمل</label><select name="tlab" id="ttlab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
     </div>
-    <div id="ttlk" class="lkname"></div>
     <div class="row2">
       <div class="field"><label>كود الصنف</label><input name="ic" id="tic" required></div>
       <div class="field"><label>اسم الصنف</label><input name="iname" id="tin" readonly></div>
     </div>
     <div id="tilk" class="lkname"></div>
-    <div id="tisec" style="margin:-6px 0 10px;"></div><input type="hidden" name="sector" id="tisecval">
-    <div class="field"><label>التشغيلة / الباتش المطلوب تحويله</label><input name="batch" id="tbatch" placeholder="اكتب رقم الباتش لعرض رصيده عند العميل المُحوَّل منه" required></div>
-    <div id="tbalbx" class="balbox">أدخل كود العميل المُحوَّل منه والصنف لعرض الباتشات المتاحة</div>
-    <div id="tbatchlist"></div>
-    <div class="field"><label>الكمية</label><input name="qty" type="number" min="1" id="tqty" required></div>
+    <div class="field"><label>التشغيلة / الباتش</label><input name="batch" id="tbatch" placeholder="اكتب رقم الباتش لعرض رصيده بالمعمل المصدر" required></div>
+    <div id="tbalbx" class="balbox">اكتب كود العميل والمعمل المصدر والصنف والباتش لعرض الرصيد المتاح داخل المعمل</div>
+    <div class="field"><label>الكمية المطلوب تحويلها</label><input name="qty" type="number" min="1" id="tqty" required></div>
     <div class="field"><label>ملحوظة</label><textarea name="note" rows="2"></textarea></div>
-    <button class="btn-primary" type="submit">إرسال لحسابات العملاء</button>
+    <button class="btn-primary" type="submit">تنفيذ التحويل فوراً</button>
   </form></div>`;}
 
+function updateLabPickers(cc){
+  const fSel=document.getElementById('tflab'),tSel=document.getElementById('ttlab');
+  if(!fSel||!tSel)return;
+  const labs=labsForCustomer(cc);
+  const curF=fSel.value,curT=tSel.value;
+  if(!cc||labs.length<2){
+    const msg=`<option value="">${!cc?'اكتب كود العميل أولاً...':'العميل ده لازم يكون له معملين على الأقل'}</option>`;
+    fSel.innerHTML=msg;tSel.innerHTML=msg;
+    return;
+  }
+  const opts=labs.map(l=>`<option value="${l.code}">${l.name}</option>`).join('');
+  fSel.innerHTML=`<option value="">اختر المعمل المصدر...</option>`+opts;
+  tSel.innerHTML=`<option value="">اختر المعمل المُحوَّل إليه...</option>`+opts;
+  if(labs.some(l=>l.code===curF))fSel.value=curF;
+  if(labs.some(l=>l.code===curT))tSel.value=curT;
+}
+
+function latestLabInfo(cc,ic,batch){
+  const matches=DB.orders.filter(o=>o.kind==='withdrawal'&&o.ccode===cc&&o.icode===ic&&(batch?o.batch===batch:true)&&o.labCode&&o.stage!=='rejected');
+  if(!matches.length)return null;
+  matches.sort((a,b)=>(b.updAt||0)-(a.updAt||0));
+  return matches[0];
+}
 function rBal(){
   const q=(S.bsrch||'').trim();
   const u=S.user;
@@ -969,11 +1103,11 @@ function rBal(){
     const dl=expiry?Math.ceil((new Date(expiry)-new Date())/864e5):null;
     return{cc,cn:c?c.name:'',ic,iname:it?it.name:'',unit:it?it.unit:'',sector:it?sname(it.sector):'',batch,expiry,dl,qty,key};
   });
-  if(allowedKeys) rows=rows.filter(r=>allowedKeys.has(r.key));
+  if(allowedKeys) rows=rows.filter(r=>[...allowedKeys].some(mk=>r.key===mk||r.key.startsWith(mk+'|')));
   if(q)rows=rows.filter(r=>r.cc.includes(q)||r.cn.includes(q)||r.ic.includes(q)||r.iname.includes(q));
   rows.sort((a,b)=>b.qty-a.qty);
   return`
-  <div class="stitle">أرصدة العملاء</div><div class="ssub">${rows.length} صنف بالمخزن</div>
+  <div class="stitle">📥 أمانة المخزن</div><div class="ssub">بضاعة العميل قبل الصرف — ${rows.length} صنف</div>
   <div class="content">
     <div class="field"><input id="bsi" placeholder="بحث بكود أو اسم العميل / الصنف..." value="${q.replace(/"/g,'&quot;')}"></div>
     ${rows.length===0?`<div class="empty"><div class="ic">💳</div><div class="t">لا توجد أرصدة بعد</div><div class="s">تظهر فور إضافة بضاعة</div></div>`:
@@ -989,6 +1123,37 @@ function rBal(){
       <div class="kv"><span>كود العميل</span><b>${r.cc}</b></div>
       <div class="kv"><span>كود الصنف</span><b>${r.ic}</b></div>
     </div>`).join('')}
+
+    <div class="slabel" style="margin-top:22px;">🏭 أرصدة المعامل (عهدة العميل بعد الصرف)</div>
+    ${(()=>{
+      const labKeys=Object.entries(DB.labBalances).filter(([,v])=>v!==0)
+        .filter(([key])=>!allowedKeys||[...allowedKeys].some(mk=>{
+          const labCode=key.split('|')[0];const lab=DB.labs.find(l=>l.code===labCode);
+          return lab&&mk.startsWith(lab.custCode+'|');
+        }));
+      if(!labKeys.length)return `<div class="empty" style="padding:24px;"><div class="ic">🏭</div><div class="t">لا توجد أرصدة بالمعامل بعد</div></div>`;
+      // تجميع حسب العميل ثم المعمل
+      const byCust={};
+      labKeys.forEach(([key,qty])=>{
+        const parts=key.split('|');const labCode=parts[0],ic=parts[1],batch=parts[2]||'';
+        const lab=DB.labs.find(l=>l.code===labCode);if(!lab)return;
+        const cc=lab.custCode;
+        byCust[cc]=byCust[cc]||{};
+        byCust[cc][labCode]=byCust[cc][labCode]||[];
+        byCust[cc][labCode].push({ic,batch,qty,labName:lab.name});
+      });
+      return Object.entries(byCust).map(([cc,labs])=>{
+        const c=fc(cc);
+        return `<div class="card">
+          <div class="ctitle" style="margin-bottom:8px;">👤 ${c?c.name:cc} <span style="color:var(--muted);font-size:11px;">(${cc})</span></div>
+          ${Object.entries(labs).map(([labCode,items])=>`
+            <div style="background:var(--blue-lg);border-radius:9px;padding:8px 10px;margin-bottom:6px;">
+              <div style="font-weight:800;font-size:12px;color:var(--blue2);margin-bottom:4px;">🏭 ${items[0].labName}</div>
+              ${items.map(it=>{const item=fi(it.ic);return `<div class="kv"><span>${item?item.name:it.ic} (${it.batch||'-'})</span><b style="color:${it.qty>0?'var(--ok)':'var(--bad)'}">${it.qty}</b></div>`;}).join('')}
+            </div>`).join('')}
+        </div>`;
+      }).join('');
+    })()}
   </div>`;}
 
 function inRng(o,r){
@@ -1001,7 +1166,7 @@ function inRng(o,r){
 
 function rRep(){
   const rng=S.rng, u=S.user;
-  const isAdmin = u.role==='admin';
+  const isAdmin = ['admin','accounts','warehouse'].includes(u.role); // الحسابات والمخازن والأدمن يشوفوا كل التقارير، مدخل البيانات يشوف عملاءه فقط
   // مدخل البيانات يرى فقط العمليات التي أدخلها هو
   const baseList = isAdmin ? DB.orders : DB.orders.filter(o=>o.cby===u.username);
   const list=baseList.filter(o=>inRng(o,rng));
@@ -1016,7 +1181,7 @@ function rRep(){
   const myKeys = isAdmin ? null : new Set(
     DB.orders.filter(o=>o.kind==='addition'&&o.cby===u.username&&o.stage!=='rejected').map(o=>bk(o.ccode,o.icode))
   );
-  const balRows = Object.entries(DB.balances).filter(([key,v])=>v!==0&&(isAdmin||myKeys.has(key)));
+  const balRows = Object.entries(DB.balances).filter(([key,v])=>v!==0&&(isAdmin||[...myKeys].some(mk=>key===mk||key.startsWith(mk+'|'))));
   return`
   <div class="stitle">التقارير${isAdmin?'':u.role==='rep'?' — تقريري':'  — عملياتي'}</div>
   <div class="ssub">${isAdmin?'جميع الحركات':u.role==='rep'?'أوردرات التسليم الخاصة بك':'حركاتي وعملائي فقط'} · ${list.length} طلب</div>
@@ -1097,16 +1262,51 @@ function rRep(){
           <div class="kv"><span>الانتهاء</span><b class="${o.dl<0?'eb':o.dl<=7?'ew':'eo'}">${o.expiry}</b></div>
         </div>`).join('')}
 
-    <div class="slabel">أرصدة العملاء${isAdmin?'':' (عملائي فقط)'}</div>
+    <div class="slabel">📥 أمانة المخزن (قبل الصرف)${isAdmin?'':' (عملائي فقط)'}</div>
     <div style="overflow-x:auto;"><table class="rep">
-      <thead><tr><th>العميل</th><th>الصنف</th><th>القطاع</th><th>التشغيلة</th><th>الصلاحية</th><th>الرصيد</th></tr></thead>
-      <tbody>${balRows.length===0?`<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:14px;">لا توجد أرصدة</td></tr>`:
+      <thead><tr><th>العميل</th><th>الصنف</th><th>القطاع</th><th>التشغيلة</th><th>الصلاحية</th><th>الرصيد بالمخزن</th></tr></thead>
+      <tbody>${balRows.length===0?`<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:14px;">لا توجد أرصدة أمانة بالمخزن</td></tr>`:
       balRows.map(([key,qty])=>{
         const parts=key.split('|');const cc=parts[0],ic=parts[1],batch=parts[2]||'';
         const c=fc(cc);const it=fi(ic);const exp=findExpiry(cc,ic,batch);
         return`<tr><td>${c?c.name:cc}</td><td>${it?it.name:ic}</td><td>${it?sname(it.sector):'-'}</td><td>${batch||'-'}</td><td>${exp||'-'}</td><td style="font-weight:800;color:${qty>0?'var(--ok)':qty<0?'var(--bad)':'var(--muted)'}">${qty}</td></tr>`;
       }).join('')}</tbody>
     </table></div>
+
+    <div class="slabel">🏭 أرصدة المعامل (بعد الصرف — في عهدة العميل)</div>
+    <div style="overflow-x:auto;"><table class="rep">
+      <thead><tr><th>العميل</th><th>المعمل</th><th>الصنف</th><th>التشغيلة</th><th>الرصيد بالمعمل</th></tr></thead>
+      <tbody>${(()=>{
+        const labKeys=Object.entries(DB.labBalances).filter(([,v])=>v!==0);
+        const filtered=isAdmin?labKeys:labKeys.filter(([key])=>{
+          const labCode=key.split('|')[0];const lab=DB.labs.find(l=>l.code===labCode);
+          return lab&&myKeys&&[...myKeys].some(k=>k.startsWith(lab.custCode+'|'));
+        });
+        if(!filtered.length)return `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:14px;">لا توجد أرصدة بالمعامل بعد</td></tr>`;
+        return filtered.map(([key,qty])=>{
+          const parts=key.split('|');const labCode=parts[0],ic=parts[1],batch=parts[2]||'';
+          const lab=DB.labs.find(l=>l.code===labCode);const c=lab?fc(lab.custCode):null;const it=fi(ic);
+          return `<tr><td>${c?c.name:(lab?lab.custCode:'-')}</td><td>🏭 ${lab?lab.name:labCode}</td><td>${it?it.name:ic}</td><td>${batch||'-'}</td><td style="font-weight:800;color:${qty>0?'var(--ok)':qty<0?'var(--bad)':'var(--muted)'}">${qty}</td></tr>`;
+        }).join('');
+      })()}</tbody>
+    </table></div>
+
+    ${isAdmin?`<div class="slabel">📦 أرصدة الكونترات</div>
+    <div class="card">
+      <div class="brow" style="margin-bottom:10px;"><button class="bs bgo" data-a="rcvcnt" type="button" style="width:100%;">📥 استلام كونتر جديد بالمخزن</button></div>
+      ${DB.counters.length===0?`<div style="text-align:center;color:var(--muted);font-size:12px;">لا توجد كونترات مسجّلة — أضيفي من الإدارة</div>`:
+      DB.counters.map(c=>{
+        const whBal=cbal('WH',c.code);
+        const labsWithCounter=DB.labs.filter(l=>cbal(l.code,c.code)>0);
+        return `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px;">
+          <div style="display:flex;justify-content:space-between;font-weight:800;font-size:13px;"><span>🎫 ${c.code} ${c.name?'— '+c.name:''}</span><span style="color:var(--ok);">بالمخزن: ${whBal}</span></div>
+          ${labsWithCounter.length?labsWithCounter.map(l=>`<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:3px 0 3px 10px;">
+            <span>🏭 ${l.name} (${fc(l.custCode)?.name||l.custCode})</span>
+            <span style="display:flex;align-items:center;gap:6px;">رصيد: ${cbal(l.code,c.code)} <button class="bs" data-a="cntret" data-lab="${l.code}" style="padding:3px 8px;font-size:10px;background:#78350F;color:#fff;">↩️ استرجاع</button></span>
+          </div>`).join(''):`<div style="font-size:11px;color:var(--muted);padding-right:10px;">لا يوجد رصيد عند أي معمل حالياً</div>`}
+        </div>`;
+      }).join('')}
+    </div>`:''}
 
     ${(()=>{
       const allDelivered=DB.orders.filter(o=>o.stage==='delivered'&&o.kind==='withdrawal');
@@ -1171,13 +1371,31 @@ function rOrd(){
   const canEdit=(o.stage==='draft')&&(ia||(u.role==='data_entry'&&o.cby===u.username));
   const canAcc=(o.stage==='pending_accounts'||o.stage==='return_pending_acc'||o.stage==='customer_return_pending_acc')&&(ia||u.role==='accounts');
   const canCars=(o.stage==='pending_cars'||o.stage==='customer_return_pending_cars')&&(ia||u.role==='cars');
-  const canWH=(o.stage==='pending_warehouse'||o.stage==='return_pending_wh'||o.stage==='customer_return_pending_wh')&&(ia||u.role==='warehouse');
+  const canWH=(o.stage==='pending_warehouse'||o.stage==='return_pending_wh'||o.stage==='customer_return_pending_wh'||o.stage==='counter_return_pending_wh')&&(ia||u.role==='warehouse');
   const repMatch=(o.repName===u.name||o.repName===u.username);
   const canRR=(o.stage==='pending_rep')&&(ia||(u.role==='rep'&&repMatch));
   const canRD=(o.stage==='with_rep')&&(ia||(u.role==='rep'&&repMatch));
   const canRepRet=(o.stage==='return_pending_rep')&&(ia||(u.role==='rep'&&repMatch));
   let flds='';
-  if(o.kind==='transfer'){
+  if(o.kind==='lab_transfer'){
+    flds=`<div class="kv"><span>العميل</span><b>${o.ccode} — ${o.cname||''}</b></div>
+    <div class="kv"><span>من معمل</span><b>🏭 ${o.flabName||o.flabCode}</b></div>
+    <div class="kv"><span>إلى معمل</span><b>🏭 ${o.tlabName||o.tlabCode}</b></div>
+    <div class="kv"><span>الصنف</span><b>${o.icode||''} — ${o.iname||''}</b></div>
+    <div class="kv"><span>التشغيلة</span><b>${o.batch||'-'}</b></div>
+    <div class="kv"><span>الكمية</span><b>${o.qty}</b></div>`;
+  }else if(o.kind==='counter_return'){
+    flds=`<div class="kv"><span>العميل</span><b>${o.ccode||''} — ${o.cname||''}</b></div>
+    <div class="kv"><span>المعمل</span><b>🏭 ${o.labName||o.labCode}</b></div>
+    <div class="kv"><span>الكونتر</span><b>${o.counterName||o.counterCode}</b></div>
+    <div class="kv"><span>الكمية</span><b>${o.qty}</b></div>`;
+  }else if(o.kind==='consumption'){
+    flds=`<div class="kv"><span>العميل</span><b>${o.ccode} — ${o.cname||''}</b></div>
+    <div class="kv"><span>المعمل</span><b>🏭 ${o.labName||o.labCode}</b></div>
+    <div class="kv"><span>الصنف</span><b>${o.icode} — ${o.iname||''}</b></div>
+    <div class="kv"><span>التشغيلة</span><b>${o.batch||'-'}</b></div>
+    <div class="kv"><span>الكمية المستهلكة</span><b>${o.qty}</b></div>`;
+  }else if(o.kind==='transfer'){
     flds=`<div class="kv"><span>من</span><b>${o.fcc} — ${o.fcname||''}</b></div>
     <div class="kv"><span>إلى</span><b>${o.tcc} — ${o.tcname||''}</b></div>
     <div class="kv"><span>الصنف</span><b>${o.icode||''} — ${o.iname||''}</b></div>
@@ -1200,7 +1418,9 @@ function rOrd(){
     <div class="kv"><span>الكمية المطلوبة</span><b>${o.qty}</b></div>
     <div class="kv"><span>الرصيد المتبقي</span><b style="color:${bal>0?'var(--ok)':'var(--bad)'}">${bal}</b></div>
     <div class="kv"><span>الباتش</span><b>${o.batch||'-'}</b></div>
-    <div class="kv"><span>المعمل</span><b>${o.labName||'-'}</b></div>`;
+    <div class="kv"><span>الكونتر / الدور</span><b>${o.counterName||o.counterCode||'-'}</b></div>
+    <div class="kv"><span>المعمل الحالي</span><b>🏭 ${o.labName||'-'}</b></div>
+    ${o.labHistory&&o.labHistory.length?`<div class="kv"><span>سجل تحويل المعمل</span><b style="font-size:11px;">${o.labHistory.map(h=>`${h.from}→${h.to}`).join(' | ')}</b></div>`:''}`;
   }
   if(o.note)flds+=`<div class="kv"><span>ملحوظة</span><b>${o.note}</b></div>`;
   if(o.repName)flds+=`<div class="kv"><span>المندوب</span><b>${o.repName}</b></div>`;
@@ -1238,7 +1458,7 @@ function rOrd(){
   } else if(canWH){
     acts += `<div class="brow">
       <button class="bs ${o.kind==='addition'?'bgreen':'bgo'}" data-a="whf" data-id="${o.id}">
-        ${(o.stage==='return_pending_wh'||o.stage==='customer_return_pending_wh')?'↩️ تأكيد الاستلام وإضافة الرصيد للعميل':o.kind==='addition'?'📦 تم الاستلام بالمخزن وإضافة الرصيد':'📦 جاهز — ترحيل للمندوب'}
+        ${o.stage==='return_pending_wh'?'↩️ تأكيد الاستلام وإضافة الرصيد للعميل':o.stage==='customer_return_pending_wh'?'⬇️ تأكيد استلام السحوبات وخصم الرصيد':o.stage==='counter_return_pending_wh'?'📦 تأكيد استلام الكونتر بالمخزن':o.kind==='addition'?'📦 تم الاستلام بالمخزن وإضافة الرصيد':'📦 جاهز — ترحيل للمندوب'}
       </button>
     </div>`;
   } else if(canRepRet){
@@ -1268,18 +1488,20 @@ function rOrd(){
       </div>`;
   }
 
-  // أوردر تسليم مكتمل → أدمن أو مدخل بيانات يقدر يفتح طلب سحب بضاعة من العميل (تلف، رجوع صنف...)
-  if(o.stage==='delivered'&&o.kind==='withdrawal'&&(ia||u.role==='data_entry')){
+  // إتاحة "سحوبات" (سحب جزئي من الرصيد في أي وقت) من أوردر إضافة تم اعتماده، أو من أوردر صرف تم تسليمه
+  const canRecall=((o.kind==='addition'&&o.stage==='approved')||(o.kind==='withdrawal'&&o.stage==='delivered'))&&(ia||u.role==='data_entry');
+  if(canRecall){
     acts += `<div class="brow" style="margin-top:6px;">
       <button class="bs" data-a="custret" data-id="${o.id}" style="background:#78350F;color:#fff;border-radius:9px;padding:10px;font-weight:800;width:100%;">
-        ↩️ طلب سحب بضاعة من هذا العميل
+        ⬇️ سحوبات من رصيد هذا العميل
       </button>
     </div>`;
   }
 
   const tc=o.kind==='addition'?'ta':(o.kind==='withdrawal'||o.kind==='return'||o.kind==='customer_return')?'tw':'tt';
-  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحب عميل':'تحويل';
+  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
   const sc=(o.stage==='rejected')?'var(--bad)':(o.stage==='delivered'||o.stage==='approved'||o.stage==='returned'||o.stage==='customer_returned')?'var(--ok)':'var(--warn)';
+  const qcOpts=['','مقبول','مرفوض','تحت الفحص','تالف'];
   return`
   <div class="stitle">تفاصيل الطلب</div><div class="ssub">${otitle(o)}</div>
   <div class="content">
@@ -1289,6 +1511,13 @@ function rOrd(){
       <div style="margin-top:12px;">${flds}</div>
       ${att}${acts}
     </div>
+    <div class="card" style="background:#FBF6EC;border-color:#E5C875;">
+      <div style="font-weight:800;font-size:13px;margin-bottom:8px;">🔬 إدارة الجودة</div>
+      ${o.qcBy?`<div class="cmeta" style="margin-bottom:6px;">آخر تحديث: ${o.qcStatus||'-'} — بواسطة ${o.qcBy} (${new Date(o.qcAt||0).toLocaleString('ar-EG')})</div>`:''}
+      <div class="field"><label>حالة البضاعة/الكونتر</label><select id="qcs">${qcOpts.map(x=>`<option value="${x}" ${o.qcStatus===x?'selected':''}>${x||'— اختر —'}</option>`).join('')}</select></div>
+      <div class="field"><label>ملاحظات الجودة</label><textarea id="qcn" rows="2" placeholder="أي ملاحظات عن حالة البضاعة أو الكونتر...">${o.qcNote||''}</textarea></div>
+      <button class="bs" data-a="qc" data-id="${o.id}" style="background:#8A6D1E;color:#fff;width:100%;">💾 حفظ ملاحظة الجودة</button>
+    </div>
     <button class="bs bghost" style="width:100%;margin-top:4px;" data-a="back">⟵ رجوع</button>
   </div>`;}
 
@@ -1296,8 +1525,12 @@ function rAdm(){return`
   <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف</div>
   <div class="content">
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
-      <div style="font-weight:800;margin-bottom:6px;">m.elmadawy@ift-online.com</div>
+      <div style="font-weight:800;margin-bottom:6px;">🔗 كيف يدخل زملاؤك على البرنامج؟</div>
       <div style="font-size:12px;line-height:2;color:var(--blue2);">
+        1. اضغط <b>Share / مشاركة</b> أعلى شات Claude وانسخ الرابط.<br>
+        2. أرسل الرابط للموظف يفتحه من Chrome أو Safari.<br>
+        3. أنشئ له حساب من الأسفل بيوزر وباسورد ودور.<br>
+        4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
       </div>
     </div>
     <div class="slabel">إضافة مستخدم</div>
@@ -1329,14 +1562,30 @@ function rAdm(){return`
       <button class="btn-primary" type="submit">إضافة</button></form>
     <div class="slabel">الأصناف (${DB.items.length})</div>
     ${DB.items.map(i=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${i.code}${i.sector?' · '+sname(i.sector):''}</span><b>${i.name} ${i.unit?'('+i.unit+')':''}</b></div>`).join('')}
+    <div class="slabel">إضافة معمل (معمل تابع لعميل)</div>
+    <form id="alf">
+      <div class="row2"><div class="field"><label>كود العميل</label><input name="ccode" id="alcc" required></div><div class="field"><label>اسم العميل</label><input name="ccname" id="alcn" readonly></div></div>
+      <div id="allk" class="lkname"></div>
+      <div class="row2"><div class="field"><label>كود المعمل</label><input name="code" required></div><div class="field"><label>اسم المعمل</label><input name="name" required></div></div>
+      <button class="btn-primary" type="submit">إضافة المعمل</button>
+    </form>
+    <div class="slabel">المعامل (${DB.labs.length})</div>
+    ${DB.labs.map(l=>{const c=fc(l.custCode);return`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${l.code} · ${c?c.name:l.custCode}</span><b>${l.name}</b></div>`;}).join('')}
+    <div class="slabel">إضافة رقم كونتر / دور</div>
+    <form id="acnf"><div class="row2"><div class="field"><label>رقم الكونتر</label><input name="code" placeholder="مثال: 12" required></div><div class="field"><label>وصف (اختياري)</label><input name="name" placeholder="مثال: دور الصباح"></div></div><button class="btn-primary" type="submit">إضافة الكونتر</button></form>
+    <div class="slabel">الكونترات (${DB.counters.length})</div>
+    ${DB.counters.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>🎫 ${c.code}</span><b>${c.name||'-'}</b></div>`).join('')}
   </div>`;}
 
 /* ===== BIND ===== */
 function bind(){
   document.querySelectorAll('[data-a]').forEach(el=>el.addEventListener('click',onA));
   const f=(id,fn)=>{const e=document.getElementById(id);if(e)e.addEventListener('submit',fn);};
-  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);
+  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);
+  lk('ccc','ccn','cclk','c');lk('cic','cin','cilk','i');
+  cbbl();
   lk('acc','acn','aclk','c');lk('aic','ain','ailk','i','aisec','aisecval');
+  lk('alcc','alcn','allk','c');
   lk('scc','scn','sclk','c');lk('sic','sin','silk','i','sisec','sisecval');
   // تحديث قائمة الباتشات عند تغيير العميل أو الصنف
   ['scc','sic'].forEach(id=>{
@@ -1347,8 +1596,8 @@ function bind(){
       updateBatchList(cc,ic);
     });
   });
-  lk('tfc','tfn','tflk','c');lk('ttc','ttn','ttlk','c');lk('tic','tin','tilk','i','tisec','tisecval');
-  bbl();tbbl();bsi();bhsi();
+  lk('tcc','tcn','tclk','c');lk('tic','tin','tilk','i');
+  bbl();tbbl();bsi();bhsi();checkInvDup();
   const af=document.getElementById('atf');if(af)af.addEventListener('change',onAtt);
   const upf=document.getElementById('upf');if(upf)upf.addEventListener('change',onUPhoto);
 }
@@ -1383,6 +1632,7 @@ function bbl(){
     const batchEl=document.getElementById('sbatch');
     const bv=(batchEl||{}).value?.trim()||'';
     const qty=+(document.getElementById('sqty')||{}).value||0;
+    updateLabOptions(cc);
     if(!cc||!ic){box.textContent='أدخل كود العميل والصنف لعرض الرصيد المتاح حالياً';box.className='balbox';return;}
     if(u.role==='data_entry'){
       const hasAdded=DB.orders.some(o=>o.kind==='addition'&&o.cby===u.username&&o.ccode===cc&&o.icode===ic&&o.stage!=='rejected');
@@ -1410,29 +1660,34 @@ function bbl(){
 function tbbl(){
   const box=document.getElementById('tbalbx');if(!box)return;
   const upd=()=>{
-    const cc=(document.getElementById('tfc')||{}).value?.trim();
+    const cc=(document.getElementById('tcc')||{}).value?.trim();
     const ic=(document.getElementById('tic')||{}).value?.trim();
-    const batchEl=document.getElementById('tbatch');
-    const bv=(batchEl||{}).value?.trim()||'';
+    const flab=(document.getElementById('tflab')||{}).value?.trim();
+    const bv=(document.getElementById('tbatch')||{}).value?.trim()||'';
     const qty=+(document.getElementById('tqty')||{}).value||0;
-    updateBatchList(cc,ic,'tbatchlist','tbatch');
-    if(!cc||!ic){box.textContent='أدخل كود العميل المُحوَّل منه والصنف لعرض الباتشات المتاحة';box.className='balbox';return;}
-    const totalBal=gb(cc,ic);
-    const batchBal=bv?gb(cc,ic,bv):null;
-    let msg='';
-    if(bv&&batchBal!==null){
-      msg=`رصيد الباتش <b>${bv}</b> عند العميل المُحوَّل منه: <b style="color:${batchBal>0?'var(--ok)':'var(--bad)'}">${batchBal}</b> | إجمالي الصنف: <b>${totalBal}</b>`;
-      if(batchBal<=0){box.className='balbox balbad';}
-      else if(qty>0&&qty>batchBal){box.className='balbox balbad';}
-      else{box.className='balbox balok';}
-    } else {
-      msg=`إجمالي الرصيد المتاح لدى العميل المُحوَّل منه: <b>${totalBal}</b> — لازم تحدد رقم الباتش المطلوب تحويله`;
-      box.className='balbox '+(totalBal<=0?'balbad':'');
-    }
+    updateLabPickers(cc);
+    if(!cc||!flab||!ic||!bv){box.textContent='اكتب كود العميل والمعمل المصدر والصنف والباتش لعرض الرصيد المتاح داخل المعمل';box.className='balbox';return;}
+    const labBal=glb(flab,ic,bv);
+    let msg=`رصيد الباتش <b>${bv}</b> داخل المعمل المصدر: <b style="color:${labBal>0?'var(--ok)':'var(--bad)'}">${labBal}</b>`;
+    if(labBal<=0){box.className='balbox balbad';}
+    else if(qty>0&&qty>labBal){box.className='balbox balbad';msg+=' — الكمية أكبر من المتاح';}
+    else{box.className='balbox balok';}
     box.innerHTML=msg;
   };
-  ['tfc','tic','tqty','tbatch'].forEach(id=>{const e=document.getElementById(id);if(e)e.addEventListener('input',upd);});
+  ['tcc','tflab','ttlab','tic','tqty','tbatch'].forEach(id=>{const e=document.getElementById(id);if(e)e.addEventListener('input',upd);});
   upd();
+}
+
+function checkInvDup(){
+  const el=document.getElementById('ainv'),chk=document.getElementById('ainvchk');
+  if(!el||!chk)return;
+  el.addEventListener('input',()=>{
+    const v=el.value.trim();
+    if(!v){chk.textContent='';chk.classList.remove('miss');return;}
+    const dup=DB.orders.some(o=>o.kind==='addition'&&o.stage!=='rejected'&&(o.inv||'').trim().toLowerCase()===v.toLowerCase());
+    if(dup){chk.textContent='⛔ رقم الأمر ده مُستخدم من قبل';chk.classList.add('miss');}
+    else{chk.textContent='✓ رقم متاح';chk.classList.remove('miss');}
+  });
 }
 
 function bsi(){
@@ -1471,6 +1726,9 @@ function onA(e){
   else if(a==='go-si'){S.screen='signin';S.err='';render();}
   else if(a==='cancel'){doCancel(id);}
   else if(a==='custret'){doCustReturn(id);}
+  else if(a==='rcvcnt'){doReceiveCounter();}
+  else if(a==='cntret'){doStartCounterReturn(el.dataset.lab);}
+  else if(a==='qc'){doQC(id);}
   else if(a==='logout'){S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
   else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;render();}
   else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;render();}
@@ -1523,6 +1781,11 @@ async function onNew(e){
   const itFound=fi(ic);
   if(itFound&&!itFound.sector){toast('⚠️ هذا الصنف غير مرتبط بقطاع — الرجاء إبلاغ الإدارة لتحديد قطاعه أولاً');return;}
   if(itFound&&!sector){toast('⛔ الرجاء اختيار/تأكيد كود الصنف حتى يظهر القطاع تلقائياً');return;}
+  if(kind==='addition'){
+    const inv=(f.get('inv')||'').trim();
+    const dup=DB.orders.some(o=>o.kind==='addition'&&o.stage!=='rejected'&&(o.inv||'').trim().toLowerCase()===inv.toLowerCase());
+    if(dup){toast(`⛔ رقم الأمر "${inv}" مُستخدم من قبل — لا يمكن تكراره`);return;}
+  }
   if(kind==='withdrawal'){
     // تحقق: مدخل البيانات لا يصرف لعميل لم يضفه هو
     if(u.role==='data_entry'){
@@ -1538,9 +1801,17 @@ async function onNew(e){
     }
     if(qty>bal){toast(`⛔ الكمية (${qty}) أكبر من الرصيد المتاح للباتش (${bal})`);return;}
   }
+  const labCode=(f.get('labCode')||'').trim();
+  const counterCode=(f.get('counterCode')||'').trim();
+  const counterWithGoods=(f.get('counterWithGoods')||'yes')==='yes';
+  const counterQty=+(f.get('counterQty')||1);
+  if(kind==='withdrawal'&&!labCode){toast('⛔ الرجاء اختيار معمل العميل (لازم يكون مسجّل للعميل ده من الإدارة أولاً)');return;}
+  if(kind==='withdrawal'&&labCode&&!labsForCustomer(cc).some(l=>l.code===labCode)){toast('⛔ هذا المعمل غير تابع لهذا العميل');return;}
   const o={id:uid('o'),kind,stage:'pending_accounts',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
     inv:f.get('inv')||'',ccode:cc,cname:f.get('cn'),icode:ic,iname:f.get('iname'),
-    batch:f.get('batch'),expiry:f.get('expiry'),qty,labName:f.get('labName')||'',note:f.get('note')||'',
+    batch:f.get('batch'),expiry:f.get('expiry'),qty,note:f.get('note')||'',
+    labCode,labName:lname(labCode),
+    counterCode,counterName:counterCode?cnname(counterCode):'',counterWithGoods,counterQty,
     sector,sectorName:sname(sector)};
   if(pendAtt)o.att=pendAtt;
   // *** الرصيد لا يُضاف هنا — يُضاف فقط عندما يؤكد المخزن استلام البضاعة ***
@@ -1550,17 +1821,25 @@ async function onNew(e){
 
 async function onTrf(e){
   e.preventDefault();const f=new FormData(e.target),u=S.user;
-  const fcc=f.get('fc')?.trim(),ic=f.get('ic')?.trim(),batch=f.get('batch')?.trim(),qty=+f.get('qty');
-  const sector=(f.get('sector')||'').trim();
-  const itFound=fi(ic);
-  if(itFound&&!itFound.sector){toast('⚠️ هذا الصنف غير مرتبط بقطاع — الرجاء إبلاغ الإدارة لتحديد قطاعه أولاً');return;}
-  if(itFound&&!sector){toast('⛔ تأكد من كود الصنف حتى يظهر القطاع تلقائياً');return;}
-  const avail=gb(fcc,ic,batch);
-  if(avail<qty){toast(`⛔ الرصيد المتاح في هذا الباتش (${avail}) أقل من الكمية المطلوب تحويلها`);return;}
-  const o={id:uid('t'),kind:'transfer',stage:'pending_accounts',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
-    fcc,fcname:f.get('fn'),tcc:f.get('tc'),tcname:f.get('tn'),
-    icode:ic,iname:f.get('iname'),batch,sector,sectorName:sname(sector),qty,note:f.get('note')};
-  DB.orders.push(o);await svo();toast('تم إرسال التحويل لحسابات العملاء');S.tab='home';render();
+  const cc=f.get('cc')?.trim(),flab=f.get('flab')?.trim(),tlab=f.get('tlab')?.trim();
+  const ic=f.get('ic')?.trim(),batch=f.get('batch')?.trim(),qty=+f.get('qty');
+  if(!flab||!tlab){toast('⛔ الرجاء اختيار المعمل المصدر والمعمل المُحوَّل إليه');return;}
+  if(flab===tlab){toast('⛔ لا يمكن التحويل لنفس المعمل');return;}
+  const labF=DB.labs.find(l=>l.code===flab),labT=DB.labs.find(l=>l.code===tlab);
+  if(!labF||!labT||labF.custCode!==cc||labT.custCode!==cc){toast('⛔ المعملين لازم يكونوا الاتنين تابعين لنفس العميل');return;}
+  const avail=glb(flab,ic,batch);
+  if(avail<=0){toast('⛔ لا يوجد رصيد لهذا الصنف/الباتش داخل المعمل المصدر');return;}
+  if(avail<qty){toast(`⛔ الرصيد المتاح داخل المعمل المصدر (${avail}) أقل من الكمية المطلوب تحويلها`);return;}
+  const kF=bk(flab,ic,batch),kT=bk(tlab,ic,batch);
+  DB.labBalances[kF]=(DB.labBalances[kF]||0)-qty;
+  if(DB.labBalances[kF]===0)delete DB.labBalances[kF];
+  DB.labBalances[kT]=(DB.labBalances[kT]||0)+qty;
+  await svlb();
+  const o={id:uid('lt'),kind:'lab_transfer',stage:'done',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
+    ccode:cc,cname:f.get('cn'),flabCode:flab,flabName:labF.name,tlabCode:tlab,tlabName:labT.name,
+    icode:ic,iname:f.get('iname'),batch,qty,note:f.get('note')};
+  DB.orders.push(o);await svo();
+  toast(`✅ تم تحويل ${qty} فوراً من ${labF.name} إلى ${labT.name}`);e.target.reset();S.tab='home';render();
 }
 
 async function onCars(e){
@@ -1625,15 +1904,41 @@ async function doRej(id){
 
 async function doWH(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
-  // تأكيد نهائي لاستلام مرتجع (سواء تسليم جزئي أو سحب من عميل) → إضافة الرصيد فوراً وفقط هنا
-  if(o.stage==='return_pending_wh'||o.stage==='customer_return_pending_wh'){
+  // تأكيد نهائي لاستلام مرتجع من تسليم جزئي → إضافة الرصيد (الكمية كانت لم تصل للعميل أصلاً)
+  if(o.stage==='return_pending_wh'){
     if(o.balAdded){toast('⚠️ تمت إضافة هذا الرصيد مسبقاً');return;}
     const k=bk(o.ccode,o.icode,o.batch);
     DB.balances[k]=(DB.balances[k]||0)+(+o.qty);
     o.balAdded=true;
-    o.stage=(o.kind==='customer_return')?'customer_returned':'returned';
+    o.stage='returned';
     o.updAt=Date.now();await svo();
     anim('✅ تم تأكيد الاستلام بالمخزن وإضافة الرصيد للعميل',()=>{S.tab='home';S.oid=null;});
+    return;
+  }
+  // تأكيد نهائي لسحوبات (سحب بضاعة من رصيد العميل) → خصم الرصيد من نفس المصدر (أمانة مخزن أو معمل)
+  if(o.stage==='customer_return_pending_wh'){
+    if(o.balAdded){toast('⚠️ تم تنفيذ هذا السحب مسبقاً');return;}
+    const fromLab = o.sourcePool==='lab';
+    const k = fromLab ? bk(o.labCode,o.icode,o.batch) : bk(o.ccode,o.icode,o.batch);
+    const pool = fromLab ? DB.labBalances : DB.balances;
+    const cur=pool[k]||0;
+    if(cur<+o.qty){toast(`⛔ الرصيد الحالي (${cur}) أقل من كمية السحب (${o.qty}) — لا يمكن التنفيذ`);return;}
+    pool[k]=cur-(+o.qty);
+    if(pool[k]===0)delete pool[k];
+    o.balAdded=true;
+    o.stage='customer_returned';
+    o.updAt=Date.now();await svo();if(fromLab)await svlb();
+    anim('✅ تم تأكيد استلام السحوبات بالمخزن وخصم الرصيد',()=>{S.tab='home';S.oid=null;});
+    return;
+  }
+  // تأكيد استلام كونتر راجع من معمل العميل → يزيد رصيد الكونتر بالمخزن
+  if(o.stage==='counter_return_pending_wh'){
+    if(o.balAdded){toast('⚠️ تم تأكيد استلام هذا الكونتر مسبقاً');return;}
+    DB.counterBalances['WH|'+o.counterCode]=(DB.counterBalances['WH|'+o.counterCode]||0)+(+o.qty);
+    o.balAdded=true;
+    o.stage='counter_returned';
+    o.updAt=Date.now();await svo();await svcb();
+    anim('✅ تم تأكيد استلام الكونتر بالمخزن',()=>{S.tab='home';S.oid=null;});
     return;
   }
   if(o.kind==='addition'){
@@ -1680,6 +1985,18 @@ async function doRDlv(id){
       const k=bk(o.ccode,o.icode,o.batch);
       DB.balances[k]=(DB.balances[k]||0)-(+o.qty);
       o.balDeducted=true;
+      // البضاعة اللي فعلاً وصلت للعميل تدخل رصيد معمله (مش رصيد المخزن)
+      if(o.labCode&&dlvQty>0){
+        const lk_=bk(o.labCode,o.icode,o.batch);
+        DB.labBalances[lk_]=(DB.labBalances[lk_]||0)+dlvQty;
+      }
+      // الكونتر: لو خرج مع البضاعة فعلاً ينتقل من رصيد المخزن لرصيد معمل العميل
+      if(o.counterCode&&o.counterWithGoods&&o.labCode){
+        const cq=+o.counterQty||1;
+        DB.counterBalances['WH|'+o.counterCode]=(DB.counterBalances['WH|'+o.counterCode]||0)-cq;
+        DB.counterBalances[o.labCode+'|'+o.counterCode]=(DB.counterBalances[o.labCode+'|'+o.counterCode]||0)+cq;
+        o.counterStatus='تم التسليم';
+      }
     }
     // لو تسليم جزئي → أنشئ أوردر إرجاع تلقائياً (يبدأ بتأكيد المندوب ثم الحسابات ثم المخازن)
     if(retQty>0){
@@ -1693,7 +2010,7 @@ async function doRDlv(id){
       };
       DB.orders.push(ret);
     }
-    await svo();
+    await svo();await svlb();await svcb();
     const msg=retQty>0
       ?`✅ تم تسليم ${dlvQty} — أوردر إرجاع تلقائي للكمية المتبقية (${retQty})`
       :'✅ تم التسليم الكامل وتحديث الرصيد';
@@ -1766,23 +2083,91 @@ async function onAS(e){
   DB.sectors.push({code,name:f.get('name')});await svs();toast('تم إضافة القطاع');e.target.reset();render();
 }
 
+async function onAL(e){
+  e.preventDefault();const f=new FormData(e.target);const code=f.get('code').trim();
+  const ccode=(f.get('ccode')||'').trim();
+  if(!fc(ccode)){toast('⛔ كود العميل غير موجود — تأكد من الكود أولاً');return;}
+  if(DB.labs.some(l=>l.code===code)){toast('كود المعمل مستخدم');return;}
+  DB.labs.push({code,name:f.get('name'),custCode:ccode});await svla();toast('تم إضافة المعمل');e.target.reset();render();
+}
+
+async function onACN(e){
+  e.preventDefault();const f=new FormData(e.target);const code=f.get('code').trim();
+  if(DB.counters.some(c=>c.code===code)){toast('رقم الكونتر ده مُستخدم من قبل');return;}
+  DB.counters.push({code,name:f.get('name')||''});await svco();toast('تم إضافة الكونتر');e.target.reset();render();
+}
+
+async function doQC(id){
+  const o=DB.orders.find(x=>x.id===id);if(!o)return;
+  const qcs=document.getElementById('qcs'),qcn=document.getElementById('qcn');
+  o.qcStatus=qcs?qcs.value:'';o.qcNote=qcn?qcn.value:'';
+  o.qcBy=S.user.name;o.qcAt=Date.now();
+  await svo();toast('✅ تم حفظ ملاحظة الجودة');render();
+}
+
+async function doStartCounterReturn(labCode){
+  const lab=DB.labs.find(l=>l.code===labCode);if(!lab)return;
+  const withThisLab=DB.counters.filter(c=>cbal(labCode,c.code)>0);
+  if(!withThisLab.length){toast('لا يوجد كونترات مسجّلة برصيد عند هذا المعمل');return;}
+  const list=withThisLab.map(c=>`${c.code} (المتاح: ${cbal(labCode,c.code)})`).join('\n');
+  const code=prompt(`استرجاع كونتر من معمل ${lab.name}\nالكونترات المتاحة:\n${list}\nاكتب كود الكونتر:`);
+  if(!code)return;
+  const counter=DB.counters.find(c=>c.code===code.trim());
+  if(!counter){toast('⛔ كود الكونتر غير موجود');return;}
+  const avail=cbal(labCode,counter.code);
+  if(avail<=0){toast('لا يوجد رصيد لهذا الكونتر عند هذا المعمل');return;}
+  const qty=+prompt(`الرصيد المتاح: ${avail}\nأدخل الكمية المطلوب استرجاعها:`||0);
+  if(!qty||qty<=0){toast('لم يتم تحديد كمية');return;}
+  if(qty>avail){toast(`⛔ الكمية أكبر من المتاح (${avail})`);return;}
+  DB.counterBalances[labCode+'|'+counter.code]=avail-qty;
+  if(DB.counterBalances[labCode+'|'+counter.code]===0)delete DB.counterBalances[labCode+'|'+counter.code];
+  await svcb();
+  const o={id:uid('cr'),kind:'counter_return',stage:'counter_return_pending_wh',
+    cby:S.user.username,cbyn:S.user.name,createdAt:Date.now(),updAt:Date.now(),
+    ccode:lab.custCode,cname:fc(lab.custCode)?.name||'',labCode,labName:lab.name,
+    counterCode:counter.code,counterName:cnname(counter.code),qty,
+    note:'استرجاع كونتر من معمل '+lab.name};
+  DB.orders.push(o);await svo();
+  toast('✅ تم بدء دورة استرجاع الكونتر — بانتظار تأكيد المخزن');S.tab='home';render();
+}
+
+async function doReceiveCounter(){
+  if(!DB.counters.length){toast('لا توجد كونترات مسجّلة — أضيفي من الإدارة أولاً');return;}
+  const list=DB.counters.map(c=>c.code).join(', ');
+  const code=prompt(`استلام كونتر جديد بالمخزن\nالكونترات المسجّلة: ${list}\nاكتب كود الكونتر:`);
+  if(!code)return;
+  const counter=DB.counters.find(c=>c.code===code.trim());
+  if(!counter){toast('⛔ كود الكونتر غير موجود — أضيفيه من الإدارة أولاً');return;}
+  const qty=+prompt('أدخل الكمية المستلمة:'||0);
+  if(!qty||qty<=0){toast('لم يتم تحديد كمية');return;}
+  DB.counterBalances['WH|'+counter.code]=(DB.counterBalances['WH|'+counter.code]||0)+qty;
+  await svcb();
+  toast(`✅ تم إضافة ${qty} إلى رصيد الكونتر بالمخزن`);render();
+}
+
 async function doCustReturn(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
-  const retQty=+prompt(`إرجاع من العميل\nالكمية المُسلَّمة: ${o.dlvQty||o.qty}\nأدخل الكمية المُرجَعة:`||0);
+  // لو الأوردر الأصلي "إضافة" لسه في أمانة المخزن، أو "صرف" وصل فعلاً لمعمل العميل
+  const sourcePool = (o.kind==='addition') ? 'warehouse' : 'lab';
+  const curBal = sourcePool==='warehouse' ? gb(o.ccode,o.icode,o.batch) : (o.labCode?glb(o.labCode,o.icode,o.batch):0);
+  const poolLabel = sourcePool==='warehouse' ? 'أمانة المخزن' : `معمل ${o.labName||''}`;
+  if(!o.labCode&&sourcePool==='lab'){toast('⛔ لا يوجد معمل مرتبط بهذا الأوردر');return;}
+  if(curBal<=0){toast(`⛔ لا يوجد رصيد حالي لهذا الصنف/الباتش في ${poolLabel} لعمل سحوبات منه`);return;}
+  const retQty=+prompt(`سحوبات من ${poolLabel}\nالرصيد الحالي المتاح: ${curBal}\nأدخل الكمية المطلوب سحبها:`||0);
   if(!retQty||retQty<=0){toast('لم يتم تحديد كمية');return;}
-  const maxRet=+(o.dlvQty||o.qty);
-  if(retQty>maxRet){toast(`⛔ الكمية المُرجَعة (${retQty}) أكبر من المُسلَّمة (${maxRet})`);return;}
+  if(retQty>curBal){toast(`⛔ الكمية المطلوبة (${retQty}) أكبر من الرصيد الحالي (${curBal})`);return;}
   const ret={
     id:uid('cret'),kind:'customer_return',stage:'customer_return_pending_acc',
     cby:o.cby,cbyn:o.cbyn,createdAt:Date.now(),updAt:Date.now(),
     ccode:o.ccode,cname:o.cname,icode:o.icode,iname:o.iname,
     batch:o.batch,qty:retQty,sector:o.sector||'',sectorName:o.sectorName||sname(o.sector),
-    repName:o.repName,originalId:id,
-    note:'سحب بضاعة من عميل بطلب مدخل البيانات — الأوردر الأصلي: '+(o.inv||id)
+    repName:o.repName,originalId:id,sourcePool,labCode:sourcePool==='lab'?o.labCode:'',labName:sourcePool==='lab'?o.labName:'',
+    note:'سحوبات بطلب '+u2n(o.cby)+' — من الأوردر: '+(o.inv||id)+' ('+poolLabel+')'
   };
   DB.orders.push(ret);await svo();
-  toast('✅ تم فتح طلب سحب من العميل وإرساله للحسابات');S.tab='home';S.oid=null;render();
+  toast('✅ تم فتح طلب سحوبات وإرساله للحسابات');S.tab='home';S.oid=null;render();
 }
+function u2n(username){const u=DB.users.find(x=>x.username===username);return u?u.name:username;}
 
 async function doCancel(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
