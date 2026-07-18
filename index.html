@@ -48,7 +48,8 @@ input,select,textarea{font-family:inherit;outline:none;}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 
 /* TOPBAR */
-.topbar{background:var(--blue);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:30;box-shadow:0 2px 8px rgba(0,0,0,.22);}
+.topbar{background:var(--blue);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:fixed;top:0;left:50%;transform:translateX(-50%);width:100%;max-width:640px;z-index:30;box-shadow:0 2px 8px rgba(0,0,0,.22);}
+.topbar-spacer{height:64px;flex-shrink:0;}
 .brand{display:flex;align-items:center;gap:10px;}
 .tlogo{width:34px;height:34px;border-radius:9px;background:#fff;padding:3px;object-fit:contain;}
 .tname{font-size:13px;font-weight:800;}
@@ -633,7 +634,7 @@ function gb(c,i,b){
   return total;
 }
 
-const RLBL={admin:'مدير النظام',data_entry:'مدخل بيانات',accounts:'حسابات العملاء',cars:'السيارات',warehouse:'المخازن',rep:'مندوب توزيع'};
+const RLBL={admin:'مدير النظام',data_entry:'مدخل بيانات',accounts:'حسابات العملاء',cars:'السيارات',warehouse:'المخازن',rep:'مندوب توزيع',quality:'إدارة الجودة'};
 const SLBL={draft:'مسودة',pending_accounts:'بانتظار الحسابات',rejected:'مرفوض',pending_cars:'بانتظار السيارات',pending_warehouse:'بانتظار المخازن',pending_rep:'بانتظار المندوب',with_rep:'مع المندوب',delivered:'تم التسليم',approved:'تم الاستلام بالمخزن ✅',
   return_pending_rep:'مرتجع — بانتظار تأكيد المندوب',return_pending_acc:'مرتجع — بانتظار الحسابات',return_pending_wh:'مرتجع — بانتظار استلام المخازن',returned:'تم تأكيد الإرجاع وإضافة الرصيد ✅',
   customer_return_pending_acc:'سحوبات — بانتظار الحسابات',customer_return_pending_cars:'سحوبات — بانتظار السيارات',customer_return_pending_wh:'سحوبات — بانتظار تأكيد المخزن',customer_returned:'تم تنفيذ السحوبات وخصم الرصيد ✅',
@@ -651,6 +652,7 @@ function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pendi
 let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null};
 let pendAtt=null;
 let pendUPhoto=null;
+let _actionLock=false;
 let preFetchedLoc=null,preFetchedLocAt=0,_locWarming=false;
 function prewarmLocation(){
   if(!navigator.geolocation||_locWarming)return;
@@ -788,6 +790,7 @@ function rShell(){
     <button class="theme-toggle" data-a="theme" id="themeBtn">🌙</button>
     <button class="logout" data-a="logout">خروج</button>
   </div>
+  <div class="topbar-spacer"></div>
   ${body}
   <img class="bottom-logo" src="${USERLOGO}" alt="logo">
   <div class="tabbar">${getTabs().map(t=>`<button data-a="tab" data-tab="${t.k}" class="${(S.tab===t.k||(S.tab==='order'&&t.k==='home'))?'active':''}"><span class="ic">${t.ic}</span>${t.t}</button>`).join('')}</div>`;}
@@ -800,6 +803,7 @@ function forRole(u){
     case 'warehouse':return DB.orders.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage));
     case 'rep':return DB.orders.filter(o=>['pending_rep','with_rep','return_pending_rep'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username));
     case 'admin':return DB.orders;
+    case 'quality':return DB.orders;
     default:return[];
   }
 }
@@ -1038,7 +1042,7 @@ function updateBatchList(cc, ic, listElId, inputElId){
   </div>`;
 }
 function rTr(){return`
-  <div class="stitle">تحويل بين المعامل</div><div class="ssub">تحويل بضاعة بين معملين تابعين لنفس العميل (بعد ما تكون اتصرفت فعلاً للعميل)</div>
+  <div class="stitle">تحويل بين المعامل</div><div class="ssub">تحويل بضاعة و/أو كونتر بين معملين تابعين لنفس العميل (بعد ما تكون اتصرفت فعلاً للعميل)</div>
   <div class="content"><form id="trf">
     <div class="row2">
       <div class="field"><label>كود العميل</label><input name="cc" id="tcc" required></div>
@@ -1049,14 +1053,24 @@ function rTr(){return`
       <div class="field"><label>من معمل</label><select name="flab" id="tflab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
       <div class="field"><label>إلى معمل</label><select name="tlab" id="ttlab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
     </div>
+
+    <div class="slabel">📦 نقل بضاعة (اختياري)</div>
     <div class="row2">
-      <div class="field"><label>كود الصنف</label><input name="ic" id="tic" required></div>
+      <div class="field"><label>كود الصنف</label><input name="ic" id="tic"></div>
       <div class="field"><label>اسم الصنف</label><input name="iname" id="tin" readonly></div>
     </div>
     <div id="tilk" class="lkname"></div>
-    <div class="field"><label>التشغيلة / الباتش</label><input name="batch" id="tbatch" placeholder="اكتب رقم الباتش لعرض رصيده بالمعمل المصدر" required></div>
+    <div class="field"><label>التشغيلة / الباتش</label><input name="batch" id="tbatch" placeholder="اكتب رقم الباتش لعرض رصيده بالمعمل المصدر"></div>
     <div id="tbalbx" class="balbox">اكتب كود العميل والمعمل المصدر والصنف والباتش لعرض الرصيد المتاح داخل المعمل</div>
-    <div class="field"><label>الكمية المطلوب تحويلها</label><input name="qty" type="number" min="1" id="tqty" required></div>
+    <div class="field"><label>الكمية المطلوب تحويلها</label><input name="qty" type="number" min="1" id="tqty"></div>
+
+    <div class="slabel">🎫 نقل كونتر (اختياري)</div>
+    <div class="row2">
+      <div class="field"><label>الكونتر</label><select name="counterCode" id="tcnt"><option value="">بدون كونتر</option>${DB.counters.map(c=>`<option value="${c.code}">${cnname(c.code)}</option>`).join('')}</select></div>
+      <div class="field"><label>الكمية</label><input name="counterQty" id="tcqty" type="number" min="1"></div>
+    </div>
+    <div id="tcntbx" class="balbox" style="display:none;"></div>
+
     <div class="field"><label>ملحوظة</label><textarea name="note" rows="2"></textarea></div>
     <button class="btn-primary" type="submit">تنفيذ التحويل فوراً</button>
   </form></div>`;}
@@ -1186,6 +1200,70 @@ function rRep(){
   <div class="stitle">التقارير${isAdmin?'':u.role==='rep'?' — تقريري':'  — عملياتي'}</div>
   <div class="ssub">${isAdmin?'جميع الحركات':u.role==='rep'?'أوردرات التسليم الخاصة بك':'حركاتي وعملائي فقط'} · ${list.length} طلب</div>
   <div class="content">
+    ${isAdmin?`
+    <div class="slabel">📊 لوحة المعلومات</div>
+    <div class="grid2" style="margin-bottom:14px;">
+      <div class="rbox" style="text-align:center;"><div class="big" style="color:var(--ok)">${qA}</div><div class="lab">إجمالي كمية الإضافة</div></div>
+      <div class="rbox" style="text-align:center;"><div class="big" style="color:var(--warn)">${qS}</div><div class="lab">إجمالي كمية الصرف</div></div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:800;font-size:12.5px;margin-bottom:8px;">📈 حركة آخر 14 يوم (استلام / صرف)</div>
+      <div style="overflow-x:auto;"><table class="rep">
+        <thead><tr><th>اليوم</th><th>استلام</th><th>صرف</th></tr></thead>
+        <tbody>${(()=>{
+          const days=[...Array(14)].map((_,i)=>{const d=new Date();d.setDate(d.getDate()-(13-i));return d;});
+          return days.map(d=>{
+            const add=DB.orders.filter(o=>o.kind==='addition'&&sameDay(o.createdAt,d)).reduce((s,o)=>s+(+o.qty||0),0);
+            const sub=DB.orders.filter(o=>o.kind==='withdrawal'&&sameDay(o.createdAt,d)).reduce((s,o)=>s+(+o.qty||0),0);
+            if(!add&&!sub)return'';
+            return `<tr><td>${d.toLocaleDateString('ar-EG',{day:'2-digit',month:'2-digit'})}</td><td style="color:var(--ok);font-weight:800;">${add}</td><td style="color:var(--warn);font-weight:800;">${sub}</td></tr>`;
+          }).join('')||`<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:10px;">لا توجد حركة</td></tr>`;
+        })()}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:800;font-size:12.5px;margin-bottom:8px;">📦 أرصدة المخزن (أعلى 8 أصناف)</div>
+      <div style="overflow-x:auto;"><table class="rep">
+        <thead><tr><th>الصنف</th><th>الرصيد</th></tr></thead>
+        <tbody>${(()=>{
+          const byItem={};
+          Object.entries(DB.balances).forEach(([k,v])=>{if(v<=0)return;const ic=k.split('|')[1];byItem[ic]=(byItem[ic]||0)+v;});
+          const top=Object.entries(byItem).sort((a,b)=>b[1]-a[1]).slice(0,8);
+          if(!top.length)return `<tr><td colspan="2" style="text-align:center;color:var(--muted);padding:10px;">لا توجد أرصدة</td></tr>`;
+          return top.map(([ic,v])=>{const it=fi(ic);return `<tr><td>${it?it.name:ic}</td><td style="font-weight:800;color:var(--ok);">${v}</td></tr>`;}).join('');
+        })()}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:800;font-size:12.5px;margin-bottom:8px;">👤 أعلى 8 عملاء برصيد (أمانة المخزن)</div>
+      <div style="overflow-x:auto;"><table class="rep">
+        <thead><tr><th>العميل</th><th>الرصيد</th></tr></thead>
+        <tbody>${(()=>{
+          const byCust={};
+          Object.entries(DB.balances).forEach(([k,v])=>{if(v<=0)return;const cc=k.split('|')[0];byCust[cc]=(byCust[cc]||0)+v;});
+          const top=Object.entries(byCust).sort((a,b)=>b[1]-a[1]).slice(0,8);
+          if(!top.length)return `<tr><td colspan="2" style="text-align:center;color:var(--muted);padding:10px;">لا توجد أرصدة</td></tr>`;
+          return top.map(([cc,v])=>{const c=fc(cc);return `<tr><td>${c?c.name:cc}</td><td style="font-weight:800;color:var(--warn);">${v}</td></tr>`;}).join('');
+        })()}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:800;font-size:12.5px;margin-bottom:8px;">🎫 حركة الكونترات (بالمخزن مقابل عند العملاء)</div>
+      <div style="overflow-x:auto;"><table class="rep">
+        <thead><tr><th>الكونتر</th><th>بالمخزن</th><th>عند العملاء</th></tr></thead>
+        <tbody>${DB.counters.length===0?`<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:10px;">لا توجد كونترات</td></tr>`:
+        DB.counters.map(c=>{
+          const wh=cbal('WH',c.code);
+          const cust=DB.labs.reduce((s,l)=>s+cbal(l.code,c.code),0);
+          return `<tr><td>${c.code}</td><td style="color:var(--ok);font-weight:800;">${wh}</td><td style="color:var(--bad);font-weight:800;">${cust}</td></tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>
+    `:''}
     <div class="pillbar">
       ${[['today','اليوم'],['week','أسبوع'],['month','شهر'],['all','الكل']].map(([v,l])=>`<button data-a="rrng" data-rng="${v}" class="${rng===v?'on':''}">${l}</button>`).join('')}
     </div>
@@ -1298,12 +1376,26 @@ function rRep(){
       DB.counters.map(c=>{
         const whBal=cbal('WH',c.code);
         const labsWithCounter=DB.labs.filter(l=>cbal(l.code,c.code)>0);
+        // تجميع حسب العميل (رصيد الكونتر لدى كل عميل = مجموع أرصدته في كل معامله)
+        const byCust={};
+        labsWithCounter.forEach(l=>{
+          byCust[l.custCode]=byCust[l.custCode]||{total:0,labs:[]};
+          byCust[l.custCode].total+=cbal(l.code,c.code);
+          byCust[l.custCode].labs.push(l);
+        });
         return `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px;">
-          <div style="display:flex;justify-content:space-between;font-weight:800;font-size:13px;"><span>🎫 ${c.code} ${c.name?'— '+c.name:''}</span><span style="color:var(--ok);">بالمخزن: ${whBal}</span></div>
-          ${labsWithCounter.length?labsWithCounter.map(l=>`<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:3px 0 3px 10px;">
-            <span>🏭 ${l.name} (${fc(l.custCode)?.name||l.custCode})</span>
-            <span style="display:flex;align-items:center;gap:6px;">رصيد: ${cbal(l.code,c.code)} <button class="bs" data-a="cntret" data-lab="${l.code}" style="padding:3px 8px;font-size:10px;background:#78350F;color:#fff;">↩️ استرجاع</button></span>
-          </div>`).join(''):`<div style="font-size:11px;color:var(--muted);padding-right:10px;">لا يوجد رصيد عند أي معمل حالياً</div>`}
+          <div style="display:flex;justify-content:space-between;font-weight:800;font-size:13px;"><span>🎫 ${c.code} ${c.name?'— '+c.name:''}</span><span style="color:var(--ok);">📥 بالمخزن: ${whBal}</span></div>
+          ${Object.keys(byCust).length===0?`<div style="font-size:11px;color:var(--muted);padding-right:10px;margin-top:4px;">لا يوجد رصيد عند أي عميل حالياً</div>`:
+          Object.entries(byCust).map(([ccode,info])=>{
+            const c2=fc(ccode);
+            return `<div style="margin-top:6px;padding-right:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:var(--blue2);"><span>👤 ${c2?c2.name:ccode}</span><span>الإجمالي: ${info.total}</span></div>
+              ${info.labs.map(l=>`<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:3px 0 3px 14px;">
+                <span>🏭 ${l.name}</span>
+                <span style="display:flex;align-items:center;gap:6px;">رصيد: ${cbal(l.code,c.code)} <button class="bs" data-a="cntret" data-lab="${l.code}" style="padding:3px 8px;font-size:10px;background:#78350F;color:#fff;">↩️ استرجاع</button></span>
+              </div>`).join('')}
+            </div>`;
+          }).join('')}
         </div>`;
       }).join('')}
     </div>`:''}
@@ -1381,9 +1473,11 @@ function rOrd(){
     flds=`<div class="kv"><span>العميل</span><b>${o.ccode} — ${o.cname||''}</b></div>
     <div class="kv"><span>من معمل</span><b>🏭 ${o.flabName||o.flabCode}</b></div>
     <div class="kv"><span>إلى معمل</span><b>🏭 ${o.tlabName||o.tlabCode}</b></div>
-    <div class="kv"><span>الصنف</span><b>${o.icode||''} — ${o.iname||''}</b></div>
+    ${o.icode?`<div class="kv"><span>الصنف</span><b>${o.icode} — ${o.iname||''}</b></div>
     <div class="kv"><span>التشغيلة</span><b>${o.batch||'-'}</b></div>
-    <div class="kv"><span>الكمية</span><b>${o.qty}</b></div>`;
+    <div class="kv"><span>كمية البضاعة</span><b>${o.qty}</b></div>`:''}
+    ${o.counterCode?`<div class="kv"><span>الكونتر</span><b>${o.counterName||o.counterCode}</b></div>
+    <div class="kv"><span>كمية الكونتر</span><b>${o.counterQty}</b></div>`:''}`;
   }else if(o.kind==='counter_return'){
     flds=`<div class="kv"><span>العميل</span><b>${o.ccode||''} — ${o.cname||''}</b></div>
     <div class="kv"><span>المعمل</span><b>🏭 ${o.labName||o.labCode}</b></div>
@@ -1458,7 +1552,7 @@ function rOrd(){
   } else if(canWH){
     acts += `<div class="brow">
       <button class="bs ${o.kind==='addition'?'bgreen':'bgo'}" data-a="whf" data-id="${o.id}">
-        ${o.stage==='return_pending_wh'?'↩️ تأكيد الاستلام وإضافة الرصيد للعميل':o.stage==='customer_return_pending_wh'?'⬇️ تأكيد استلام السحوبات وخصم الرصيد':o.stage==='counter_return_pending_wh'?'📦 تأكيد استلام الكونتر بالمخزن':o.kind==='addition'?'📦 تم الاستلام بالمخزن وإضافة الرصيد':'📦 جاهز — ترحيل للمندوب'}
+        ${o.stage==='return_pending_wh'?'↩️ تأكيد الاستلام وإضافة الرصيد للعميل':o.stage==='customer_return_pending_wh'?(o.sourcePool==='lab'?'⬇️ تأكيد الاستلام — رجوعها لأمانة المخزن':'⬇️ تأكيد السحب وخصمها نهائياً من أمانة المخزن'):o.stage==='counter_return_pending_wh'?'📦 تأكيد استلام الكونتر بالمخزن':o.kind==='addition'?'📦 تم الاستلام بالمخزن وإضافة الرصيد':'📦 جاهز — ترحيل للمندوب'}
       </button>
     </div>`;
   } else if(canRepRet){
@@ -1513,10 +1607,12 @@ function rOrd(){
     </div>
     <div class="card" style="background:#FBF6EC;border-color:#E5C875;">
       <div style="font-weight:800;font-size:13px;margin-bottom:8px;">🔬 إدارة الجودة</div>
-      ${o.qcBy?`<div class="cmeta" style="margin-bottom:6px;">آخر تحديث: ${o.qcStatus||'-'} — بواسطة ${o.qcBy} (${new Date(o.qcAt||0).toLocaleString('ar-EG')})</div>`:''}
+      ${o.qcBy?`<div class="cmeta" style="margin-bottom:6px;">آخر تحديث: <b style="color:${o.qcStatus==='مرفوض'||o.qcStatus==='تالف'?'var(--bad)':o.qcStatus==='مقبول'?'var(--ok)':'var(--warn)'}">${o.qcStatus||'-'}</b> — بواسطة ${o.qcBy} (${new Date(o.qcAt||0).toLocaleString('ar-EG')})${o.qcNote?'<br>ملاحظة: '+o.qcNote:''}</div>`:`<div class="cmeta" style="margin-bottom:6px;">لم يتم تسجيل حالة جودة بعد (لا يوقف هذا سير العمل)</div>`}
+      ${(u.role==='quality'||ia)?`
       <div class="field"><label>حالة البضاعة/الكونتر</label><select id="qcs">${qcOpts.map(x=>`<option value="${x}" ${o.qcStatus===x?'selected':''}>${x||'— اختر —'}</option>`).join('')}</select></div>
       <div class="field"><label>ملاحظات الجودة</label><textarea id="qcn" rows="2" placeholder="أي ملاحظات عن حالة البضاعة أو الكونتر...">${o.qcNote||''}</textarea></div>
       <button class="bs" data-a="qc" data-id="${o.id}" style="background:#8A6D1E;color:#fff;width:100%;">💾 حفظ ملاحظة الجودة</button>
+      `:`<div style="font-size:11.5px;color:var(--muted);">قسم إدارة الجودة فقط هو المخوّل بتسجيل أو تعديل هذه الحالة.</div>`}
     </div>
     <button class="bs bghost" style="width:100%;margin-top:4px;" data-a="back">⟵ رجوع</button>
   </div>`;}
@@ -1525,19 +1621,16 @@ function rAdm(){return`
   <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف</div>
   <div class="content">
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
-      <div style="font-weight:800;margin-bottom:6px;">🔗 كيف يدخل زملاؤك على البرنامج؟</div>
+      <div style="font-weight:800;margin-bottom:6px;">🔗 للتواصل بمدير البرنامج محمد المعداوى 01003459541</div>
       <div style="font-size:12px;line-height:2;color:var(--blue2);">
-        1. اضغط <b>Share / مشاركة</b> أعلى شات Claude وانسخ الرابط.<br>
-        2. أرسل الرابط للموظف يفتحه من Chrome أو Safari.<br>
-        3. أنشئ له حساب من الأسفل بيوزر وباسورد ودور.<br>
-        4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
+       
       </div>
     </div>
     <div class="slabel">إضافة مستخدم</div>
     <form id="auf">
       <div class="row2"><div class="field"><label>الاسم الكامل</label><input name="name" required></div><div class="field"><label>اسم المستخدم</label><input name="un" required></div></div>
       <div class="row2"><div class="field"><label>كلمة المرور</label><input name="pw" required></div>
-        <div class="field"><label>الدور</label><select name="role"><option value="data_entry">مدخل بيانات</option><option value="accounts">حسابات العملاء</option><option value="cars">السيارات</option><option value="warehouse">المخازن</option><option value="rep">مندوب توزيع</option><option value="admin">مدير النظام</option></select></div>
+        <div class="field"><label>الدور</label><select name="role"><option value="data_entry">مدخل بيانات</option><option value="accounts">حسابات العملاء</option><option value="cars">السيارات</option><option value="warehouse">المخازن</option><option value="rep">مندوب توزيع</option><option value="quality">إدارة الجودة</option><option value="admin">مدير النظام</option></select></div>
       </div>
       <label class="attachbtn" for="upf">📷 صورة المستخدم (مطلوبة)</label>
       <input type="file" id="upf" accept="image/*" capture="user" style="display:none;">
@@ -1572,15 +1665,36 @@ function rAdm(){return`
     <div class="slabel">المعامل (${DB.labs.length})</div>
     ${DB.labs.map(l=>{const c=fc(l.custCode);return`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${l.code} · ${c?c.name:l.custCode}</span><b>${l.name}</b></div>`;}).join('')}
     <div class="slabel">إضافة رقم كونتر / دور</div>
-    <form id="acnf"><div class="row2"><div class="field"><label>رقم الكونتر</label><input name="code" placeholder="مثال: 12" required></div><div class="field"><label>وصف (اختياري)</label><input name="name" placeholder="مثال: دور الصباح"></div></div><button class="btn-primary" type="submit">إضافة الكونتر</button></form>
+    <form id="acnf">
+      <div class="row2"><div class="field"><label>رقم الكونتر</label><input name="code" placeholder="مثال: 12" required></div><div class="field"><label>وصف (اختياري)</label><input name="name" placeholder="مثال: دور الصباح"></div></div>
+      <div class="field"><label>المسؤول عن الكونتر (مدخل بيانات / مندوب خدمة)</label><select name="owner" required>${DB.users.filter(u2=>u2.role==='data_entry').length?`<option value="">اختر المسؤول...</option>`+DB.users.filter(u2=>u2.role==='data_entry').map(u2=>`<option value="${u2.username}">${u2.name}</option>`).join(''):'<option value="">لا يوجد مدخلي بيانات مسجّلين بعد</option>'}</select></div>
+      <button class="btn-primary" type="submit">إضافة الكونتر</button>
+    </form>
     <div class="slabel">الكونترات (${DB.counters.length})</div>
-    ${DB.counters.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>🎫 ${c.code}</span><b>${c.name||'-'}</b></div>`).join('')}
+    ${DB.counters.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>🎫 ${c.code} ${c.name?'· '+c.name:''}</span><b>👤 ${u2n(c.owner)||'بدون مسؤول'}</b></div>`).join('')}
   </div>`;}
 
 /* ===== BIND ===== */
+function sameDay(ts,d){const a=new Date(ts||0);return a.getFullYear()===d.getFullYear()&&a.getMonth()===d.getMonth()&&a.getDate()===d.getDate();}
+
 function bind(){
   document.querySelectorAll('[data-a]').forEach(el=>el.addEventListener('click',onA));
-  const f=(id,fn)=>{const e=document.getElementById(id);if(e)e.addEventListener('submit',fn);};
+  const f=(id,fn)=>{
+    const e=document.getElementById(id);if(!e)return;
+    e.addEventListener('submit',async(ev)=>{
+      ev.preventDefault();
+      if(_actionLock)return;
+      _actionLock=true;
+      const btn=e.querySelector('button[type="submit"]');
+      const origLabel=btn?btn.textContent:'';
+      if(btn){btn.disabled=true;btn.textContent='⏳ جارِ التنفيذ...';btn.style.opacity='.65';}
+      try{ await fn(ev); }
+      finally{
+        _actionLock=false;
+        if(btn){btn.disabled=false;btn.textContent=origLabel;btn.style.opacity='1';}
+      }
+    });
+  };
   f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);
   lk('ccc','ccn','cclk','c');lk('cic','cin','cilk','i');
   cbbl();
@@ -1659,6 +1773,7 @@ function bbl(){
 
 function tbbl(){
   const box=document.getElementById('tbalbx');if(!box)return;
+  const cbox=document.getElementById('tcntbx');
   const upd=()=>{
     const cc=(document.getElementById('tcc')||{}).value?.trim();
     const ic=(document.getElementById('tic')||{}).value?.trim();
@@ -1666,15 +1781,29 @@ function tbbl(){
     const bv=(document.getElementById('tbatch')||{}).value?.trim()||'';
     const qty=+(document.getElementById('tqty')||{}).value||0;
     updateLabPickers(cc);
-    if(!cc||!flab||!ic||!bv){box.textContent='اكتب كود العميل والمعمل المصدر والصنف والباتش لعرض الرصيد المتاح داخل المعمل';box.className='balbox';return;}
-    const labBal=glb(flab,ic,bv);
-    let msg=`رصيد الباتش <b>${bv}</b> داخل المعمل المصدر: <b style="color:${labBal>0?'var(--ok)':'var(--bad)'}">${labBal}</b>`;
-    if(labBal<=0){box.className='balbox balbad';}
-    else if(qty>0&&qty>labBal){box.className='balbox balbad';msg+=' — الكمية أكبر من المتاح';}
-    else{box.className='balbox balok';}
-    box.innerHTML=msg;
+    if(!cc||!flab||!ic||!bv){box.textContent='اكتب كود العميل والمعمل المصدر والصنف والباتش لعرض الرصيد المتاح داخل المعمل';box.className='balbox';}
+    else{
+      const labBal=glb(flab,ic,bv);
+      let msg=`رصيد الباتش <b>${bv}</b> داخل المعمل المصدر: <b style="color:${labBal>0?'var(--ok)':'var(--bad)'}">${labBal}</b>`;
+      if(labBal<=0){box.className='balbox balbad';}
+      else if(qty>0&&qty>labBal){box.className='balbox balbad';msg+=' — الكمية أكبر من المتاح';}
+      else{box.className='balbox balok';}
+      box.innerHTML=msg;
+    }
+    // رصيد الكونتر المختار داخل المعمل المصدر
+    if(cbox){
+      const cnt=(document.getElementById('tcnt')||{}).value;
+      const cqty=+(document.getElementById('tcqty')||{}).value||0;
+      if(!flab||!cnt){cbox.style.display='none';}
+      else{
+        const cBal=cbal(flab,cnt);
+        cbox.style.display='block';
+        cbox.innerHTML=`رصيد الكونتر <b>${cnname(cnt)}</b> داخل المعمل المصدر: <b style="color:${cBal>0?'var(--ok)':'var(--bad)'}">${cBal}</b>`;
+        cbox.className='balbox '+(cBal<=0?'balbad':(cqty>0&&cqty>cBal?'balbad':'balok'));
+      }
+    }
   };
-  ['tcc','tflab','ttlab','tic','tqty','tbatch'].forEach(id=>{const e=document.getElementById(id);if(e)e.addEventListener('input',upd);});
+  ['tcc','tflab','ttlab','tic','tqty','tbatch','tcnt','tcqty'].forEach(id=>{const e=document.getElementById(id);if(e){e.addEventListener('input',upd);e.addEventListener('change',upd);}});
   upd();
 }
 
@@ -1722,6 +1851,14 @@ async function onUPhoto(e){
 
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
+  // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
+  const navActions=new Set(['theme','go-si','logout','tab','stype','flt','clf','open','back','rrng']);
+  if(!navActions.has(a)){
+    if(_actionLock)return;
+    _actionLock=true;
+    try{el.disabled=true;el.style.opacity='.55';el.style.pointerEvents='none';}catch(_){}
+    setTimeout(()=>{_actionLock=false;},1500);
+  }
   if(a==='theme'){nightMode=!nightMode;localStorage.setItem(NIGHT_KEY,nightMode?'1':'0');_lastBGTab=null;render();}
   else if(a==='go-si'){S.screen='signin';S.err='';render();}
   else if(a==='cancel'){doCancel(id);}
@@ -1807,6 +1944,12 @@ async function onNew(e){
   const counterQty=+(f.get('counterQty')||1);
   if(kind==='withdrawal'&&!labCode){toast('⛔ الرجاء اختيار معمل العميل (لازم يكون مسجّل للعميل ده من الإدارة أولاً)');return;}
   if(kind==='withdrawal'&&labCode&&!labsForCustomer(cc).some(l=>l.code===labCode)){toast('⛔ هذا المعمل غير تابع لهذا العميل');return;}
+  if(kind==='withdrawal'&&counterCode){
+    const counter=DB.counters.find(x=>x.code===counterCode);
+    if(counter&&counter.owner&&counter.owner!==u.username&&u.role!=='admin'){
+      toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط — لا يمكنك صرفه`);return;
+    }
+  }
   const o={id:uid('o'),kind,stage:'pending_accounts',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
     inv:f.get('inv')||'',ccode:cc,cname:f.get('cn'),icode:ic,iname:f.get('iname'),
     batch:f.get('batch'),expiry:f.get('expiry'),qty,note:f.get('note')||'',
@@ -1822,24 +1965,53 @@ async function onNew(e){
 async function onTrf(e){
   e.preventDefault();const f=new FormData(e.target),u=S.user;
   const cc=f.get('cc')?.trim(),flab=f.get('flab')?.trim(),tlab=f.get('tlab')?.trim();
-  const ic=f.get('ic')?.trim(),batch=f.get('batch')?.trim(),qty=+f.get('qty');
+  const ic=f.get('ic')?.trim(),batch=f.get('batch')?.trim(),qty=+f.get('qty')||0;
+  const counterCode=f.get('counterCode')?.trim(),counterQty=+f.get('counterQty')||0;
   if(!flab||!tlab){toast('⛔ الرجاء اختيار المعمل المصدر والمعمل المُحوَّل إليه');return;}
   if(flab===tlab){toast('⛔ لا يمكن التحويل لنفس المعمل');return;}
   const labF=DB.labs.find(l=>l.code===flab),labT=DB.labs.find(l=>l.code===tlab);
   if(!labF||!labT||labF.custCode!==cc||labT.custCode!==cc){toast('⛔ المعملين لازم يكونوا الاتنين تابعين لنفس العميل');return;}
-  const avail=glb(flab,ic,batch);
-  if(avail<=0){toast('⛔ لا يوجد رصيد لهذا الصنف/الباتش داخل المعمل المصدر');return;}
-  if(avail<qty){toast(`⛔ الرصيد المتاح داخل المعمل المصدر (${avail}) أقل من الكمية المطلوب تحويلها`);return;}
-  const kF=bk(flab,ic,batch),kT=bk(tlab,ic,batch);
-  DB.labBalances[kF]=(DB.labBalances[kF]||0)-qty;
-  if(DB.labBalances[kF]===0)delete DB.labBalances[kF];
-  DB.labBalances[kT]=(DB.labBalances[kT]||0)+qty;
-  await svlb();
+  const wantsGoods = ic && batch && qty>0;
+  const wantsCounter = counterCode && counterQty>0;
+  if(!wantsGoods && !wantsCounter){toast('⛔ حدّدي بضاعة و/أو كونتر تحويهم');return;}
+  if(wantsCounter){
+    const counter=DB.counters.find(c=>c.code===counterCode);
+    if(!counter){toast('⛔ كود الكونتر غير موجود');return;}
+    if(counter.owner&&counter.owner!==u.username&&u.role!=='admin'){
+      toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط — لا يمكنك تحويله`);return;
+    }
+    const cAvail=cbal(flab,counterCode);
+    if(cAvail<=0){toast('⛔ لا يوجد رصيد لهذا الكونتر داخل المعمل المصدر');return;}
+    if(cAvail<counterQty){toast(`⛔ رصيد الكونتر بالمعمل المصدر (${cAvail}) أقل من الكمية المطلوبة`);return;}
+  }
+  if(wantsGoods){
+    const avail=glb(flab,ic,batch);
+    if(avail<=0){toast('⛔ لا يوجد رصيد لهذا الصنف/الباتش داخل المعمل المصدر');return;}
+    if(avail<qty){toast(`⛔ الرصيد المتاح داخل المعمل المصدر (${avail}) أقل من الكمية المطلوب تحويلها`);return;}
+  }
+  if(wantsGoods){
+    const kF=bk(flab,ic,batch),kT=bk(tlab,ic,batch);
+    DB.labBalances[kF]=(DB.labBalances[kF]||0)-qty;
+    if(DB.labBalances[kF]===0)delete DB.labBalances[kF];
+    DB.labBalances[kT]=(DB.labBalances[kT]||0)+qty;
+    await svlb();
+  }
+  if(wantsCounter){
+    DB.counterBalances[flab+'|'+counterCode]=(DB.counterBalances[flab+'|'+counterCode]||0)-counterQty;
+    if(DB.counterBalances[flab+'|'+counterCode]===0)delete DB.counterBalances[flab+'|'+counterCode];
+    DB.counterBalances[tlab+'|'+counterCode]=(DB.counterBalances[tlab+'|'+counterCode]||0)+counterQty;
+    await svcb();
+  }
   const o={id:uid('lt'),kind:'lab_transfer',stage:'done',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
     ccode:cc,cname:f.get('cn'),flabCode:flab,flabName:labF.name,tlabCode:tlab,tlabName:labT.name,
-    icode:ic,iname:f.get('iname'),batch,qty,note:f.get('note')};
+    icode:wantsGoods?ic:'',iname:wantsGoods?f.get('iname'):'',batch:wantsGoods?batch:'',qty:wantsGoods?qty:0,
+    counterCode:wantsCounter?counterCode:'',counterName:wantsCounter?cnname(counterCode):'',counterQty:wantsCounter?counterQty:0,
+    note:f.get('note')};
   DB.orders.push(o);await svo();
-  toast(`✅ تم تحويل ${qty} فوراً من ${labF.name} إلى ${labT.name}`);e.target.reset();S.tab='home';render();
+  const parts=[];
+  if(wantsGoods)parts.push(`${qty} من البضاعة`);
+  if(wantsCounter)parts.push(`${counterQty} كونتر`);
+  toast(`✅ تم تحويل ${parts.join(' و')} فوراً من ${labF.name} إلى ${labT.name}`);e.target.reset();S.tab='home';render();
 }
 
 async function onCars(e){
@@ -1915,7 +2087,7 @@ async function doWH(id){
     anim('✅ تم تأكيد الاستلام بالمخزن وإضافة الرصيد للعميل',()=>{S.tab='home';S.oid=null;});
     return;
   }
-  // تأكيد نهائي لسحوبات (سحب بضاعة من رصيد العميل) → خصم الرصيد من نفس المصدر (أمانة مخزن أو معمل)
+  // تأكيد نهائي لسحوبات (سحب بضاعة من رصيد العميل) → خصم الرصيد من المصدر، ولو كانت من معمل فالبضاعة بترجع فعلياً لأمانة المخزن
   if(o.stage==='customer_return_pending_wh'){
     if(o.balAdded){toast('⚠️ تم تنفيذ هذا السحب مسبقاً');return;}
     const fromLab = o.sourcePool==='lab';
@@ -1925,10 +2097,15 @@ async function doWH(id){
     if(cur<+o.qty){toast(`⛔ الرصيد الحالي (${cur}) أقل من كمية السحب (${o.qty}) — لا يمكن التنفيذ`);return;}
     pool[k]=cur-(+o.qty);
     if(pool[k]===0)delete pool[k];
+    if(fromLab){
+      // البضاعة راجعة فعلياً بالمخزن → تضاف لأمانة المخزن الخاصة بنفس العميل
+      const wk=bk(o.ccode,o.icode,o.batch);
+      DB.balances[wk]=(DB.balances[wk]||0)+(+o.qty);
+    }
     o.balAdded=true;
     o.stage='customer_returned';
     o.updAt=Date.now();await svo();if(fromLab)await svlb();
-    anim('✅ تم تأكيد استلام السحوبات بالمخزن وخصم الرصيد',()=>{S.tab='home';S.oid=null;});
+    anim(fromLab?'✅ تم استلام السحوبات وإرجاعها لأمانة المخزن':'✅ تم تأكيد استلام السحوبات بالمخزن وخصم الرصيد',()=>{S.tab='home';S.oid=null;});
     return;
   }
   // تأكيد استلام كونتر راجع من معمل العميل → يزيد رصيد الكونتر بالمخزن
@@ -2093,11 +2270,14 @@ async function onAL(e){
 
 async function onACN(e){
   e.preventDefault();const f=new FormData(e.target);const code=f.get('code').trim();
+  const owner=(f.get('owner')||'').trim();
+  if(!owner){toast('⛔ الرجاء اختيار المسؤول عن الكونتر');return;}
   if(DB.counters.some(c=>c.code===code)){toast('رقم الكونتر ده مُستخدم من قبل');return;}
-  DB.counters.push({code,name:f.get('name')||''});await svco();toast('تم إضافة الكونتر');e.target.reset();render();
+  DB.counters.push({code,name:f.get('name')||'',owner});await svco();toast('تم إضافة الكونتر');e.target.reset();render();
 }
 
 async function doQC(id){
+  if(!(S.user.role==='quality'||S.user.role==='admin')){toast('⛔ إدارة الجودة فقط هي المخوّلة بهذا الإجراء');return;}
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
   const qcs=document.getElementById('qcs'),qcn=document.getElementById('qcn');
   o.qcStatus=qcs?qcs.value:'';o.qcNote=qcn?qcn.value:'';
@@ -2114,6 +2294,9 @@ async function doStartCounterReturn(labCode){
   if(!code)return;
   const counter=DB.counters.find(c=>c.code===code.trim());
   if(!counter){toast('⛔ كود الكونتر غير موجود');return;}
+  if(counter.owner&&counter.owner!==S.user.username&&S.user.role!=='admin'){
+    toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط — هو المخوّل باسترجاعه`);return;
+  }
   const avail=cbal(labCode,counter.code);
   if(avail<=0){toast('لا يوجد رصيد لهذا الكونتر عند هذا المعمل');return;}
   const qty=+prompt(`الرصيد المتاح: ${avail}\nأدخل الكمية المطلوب استرجاعها:`||0);
@@ -2192,20 +2375,35 @@ async function doCancel(id){
 function doXLS(){
   if(typeof XLSX==='undefined'){toast('جارِ تحميل مكتبة Excel...');return;}
   const wb=XLSX.utils.book_new();
-  const hd=[['التاريخ','النوع','رقم الأمر','العميل','الصنف','الكمية','الحالة','المندوب','رقم العربية','بواسطة','ملحوظة']];
-  DB.orders.forEach(o=>hd.push([
-    new Date(o.createdAt||Date.now()).toLocaleDateString('ar-EG'),
-    o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':'تحويل',
-    o.inv||'-',o.cname||o.fcname||o.ccode||'-',o.iname||o.icode||'-',o.qty||'-',
-    SLBL[o.stage]||o.stage,o.repName||'-',o.carNo||'-',o.cbyn||o.cby||'-',o.note||''
-  ]));
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(hd),'الحركات');
-  const bd=[['كود العميل','اسم العميل','كود الصنف','اسم الصنف','الرصيد']];
-  Object.entries(DB.balances).forEach(([k,qty])=>{
-    const[cc,ic]=k.split('|');const c=fc(cc);const it=fi(ic);
-    bd.push([cc,c?c.name:'',ic,it?it.name:'',qty]);
+  const hd=[['التاريخ','النوع','رقم الأمر','العميل','الصنف','التشغيلة (Batch)','تاريخ الانتهاء','الكمية','الحالة','المندوب','رقم العربية','المعمل','مسؤول الخدمة/الدكتور','بواسطة','ملحوظة']];
+  DB.orders.forEach(o=>{
+    const doctorName = o.kind==='withdrawal'&&o.counterCode ? u2n((DB.counters.find(c=>c.code===o.counterCode)||{}).owner) : (o.cby?u2n(o.cby):'-');
+    hd.push([
+      new Date(o.createdAt||Date.now()).toLocaleDateString('ar-EG'),
+      o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':o.kind==='lab_transfer'?'تحويل بين معامل':o.kind==='consumption'?'استهلاك':o.kind==='counter_return'?'استرجاع كونتر':'تحويل',
+      o.inv||'-',o.cname||o.fcname||o.ccode||'-',o.iname||o.icode||'-',
+      o.batch||'-',o.expiry||'-',o.qty||'-',
+      SLBL[o.stage]||o.stage,o.repName||'-',o.carNo||'-',o.labName||'-',doctorName||'-',
+      o.cbyn||o.cby||'-',o.note||''
+    ]);
   });
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(bd),'الأرصدة');
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(hd),'الحركات');
+  const bd=[['كود العميل','اسم العميل','كود الصنف','اسم الصنف','التشغيلة (Batch)','تاريخ الانتهاء','مسؤول الخدمة/الدكتور','الرصيد (أمانة المخزن)']];
+  Object.entries(DB.balances).forEach(([k,qty])=>{
+    const parts=k.split('|');const cc=parts[0],ic=parts[1],batch=parts[2]||'';
+    const c=fc(cc);const it=fi(ic);const exp=findExpiry(cc,ic,batch);
+    const dEntryOrder=DB.orders.find(o=>o.kind==='addition'&&o.ccode===cc&&o.icode===ic&&o.stage!=='rejected');
+    bd.push([cc,c?c.name:'',ic,it?it.name:'',batch||'-',exp||'-',dEntryOrder?u2n(dEntryOrder.cby):'-',qty]);
+  });
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(bd),'أمانة المخزن');
+  const ld=[['كود العميل','اسم العميل','المعمل','كود الصنف','اسم الصنف','التشغيلة (Batch)','تاريخ الانتهاء','الرصيد بالمعمل']];
+  Object.entries(DB.labBalances).forEach(([k,qty])=>{
+    const parts=k.split('|');const labCode=parts[0],ic=parts[1],batch=parts[2]||'';
+    const lab=DB.labs.find(l=>l.code===labCode);const c=lab?fc(lab.custCode):null;const it=fi(ic);
+    const exp=lab?findExpiry(lab.custCode,ic,batch):null;
+    ld.push([lab?lab.custCode:'-',c?c.name:'-',lab?lab.name:labCode,ic,it?it.name:'',batch||'-',exp||'-',qty]);
+  });
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ld),'أرصدة المعامل');
   XLSX.writeFile(wb,'IFT_Amana_'+new Date().toISOString().slice(0,10)+'.xlsx');
 }
 </script></body></html>
