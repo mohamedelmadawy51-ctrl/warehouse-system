@@ -18,14 +18,14 @@
   --r:14px;--sh:0 2px 8px rgba(11,56,102,.08);--shl:0 8px 24px rgba(11,56,102,.14);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
-html,body{height:100%;}
+html,body{height:100%;overflow:hidden;}
 body{font-family:'Cairo',sans-serif;background:var(--paper);color:var(--blue);-webkit-font-smoothing:antialiased;}
 button{font-family:inherit;cursor:pointer;border:none;outline:none;}
 input,select,textarea{font-family:inherit;outline:none;}
-#app{max-width:640px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;background:var(--paper);position:relative;overflow-x:hidden;}
+#app{max-width:640px;margin:0 auto;height:100vh;height:100dvh;display:flex;flex-direction:column;background:var(--paper);position:relative;overflow:hidden;}
 
 /* WELCOME */
-.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,var(--blue) 0%,#0a2f55 70%,#061d35 100%);color:#fff;padding:48px 28px;text-align:center;min-height:100vh;}
+.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,var(--blue) 0%,#0a2f55 70%,#061d35 100%);color:#fff;padding:48px 28px;text-align:center;overflow-y:auto;}
 .wlogo{width:100px;height:100px;border-radius:24px;background:#fff;padding:8px;margin-bottom:24px;box-shadow:0 16px 40px rgba(0,0,0,.3);object-fit:contain;}
 .welcome h1{font-size:26px;font-weight:900;margin-bottom:6px;}
 .corp{font-size:10px;letter-spacing:3px;color:#8BB4D4;margin-bottom:12px;}
@@ -36,7 +36,7 @@ input,select,textarea{font-family:inherit;outline:none;}
 .btn-primary:active{transform:scale(.97);background:var(--green-d);}
 
 /* SIGNIN */
-.signin{flex:1;display:flex;flex-direction:column;justify-content:center;padding:36px 24px;min-height:100vh;}
+.signin{flex:1;display:flex;flex-direction:column;justify-content:center;padding:36px 24px;overflow-y:auto;}
 .slogo{width:58px;height:58px;border-radius:16px;background:#fff;padding:6px;margin-bottom:16px;box-shadow:var(--shl);object-fit:contain;border:1px solid var(--line);}
 .signin h2{font-size:22px;font-weight:800;margin-bottom:4px;}
 .signin .sub{color:var(--muted);font-size:13px;margin-bottom:24px;}
@@ -48,8 +48,7 @@ input,select,textarea{font-family:inherit;outline:none;}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 
 /* TOPBAR */
-.topbar{background:var(--blue);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:fixed;top:0;left:50%;transform:translateX(-50%);width:100%;max-width:640px;z-index:30;box-shadow:0 2px 8px rgba(0,0,0,.22);}
-.topbar-spacer{height:64px;flex-shrink:0;}
+.topbar{background:var(--blue);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;z-index:30;box-shadow:0 2px 8px rgba(0,0,0,.22);}
 .brand{display:flex;align-items:center;gap:10px;}
 .tlogo{width:34px;height:34px;border-radius:9px;background:#fff;padding:3px;object-fit:contain;}
 .tname{font-size:13px;font-weight:800;}
@@ -57,14 +56,14 @@ input,select,textarea{font-family:inherit;outline:none;}
 .logout{background:rgba(255,255,255,.1);color:#fff;padding:7px 12px;border-radius:9px;font-size:12px;font-weight:700;}
 
 /* TABBAR */
-.tabbar{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:640px;background:#fff;border-top:1px solid var(--line);display:flex;z-index:30;padding:5px 2px calc(5px + env(safe-area-inset-bottom));}
+.tabbar{flex-shrink:0;background:#fff;border-top:1px solid var(--line);display:flex;z-index:30;padding:5px 2px calc(5px + env(safe-area-inset-bottom));}
 .tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 1px;background:none;color:var(--muted);font-size:9.5px;font-weight:700;border-radius:10px;}
 .tabbar .ic{font-size:17px;}
 .tabbar button.active{color:var(--blue);}
 
 .stitle{padding:16px 16px 2px;font-size:18px;font-weight:900;color:var(--blue);}
 .ssub{padding:0 16px 10px;font-size:12px;color:var(--muted);}
-.content{flex:1;padding:4px 14px 100px;overflow-y:auto;}
+.content{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:4px 14px 24px;}
 
 /* CARDS */
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:11px;box-shadow:var(--sh);}
@@ -790,7 +789,6 @@ function rShell(){
     <button class="theme-toggle" data-a="theme" id="themeBtn">🌙</button>
     <button class="logout" data-a="logout">خروج</button>
   </div>
-  <div class="topbar-spacer"></div>
   ${body}
   <img class="bottom-logo" src="${USERLOGO}" alt="logo">
   <div class="tabbar">${getTabs().map(t=>`<button data-a="tab" data-tab="${t.k}" class="${(S.tab===t.k||(S.tab==='order'&&t.k==='home'))?'active':''}"><span class="ic">${t.ic}</span>${t.t}</button>`).join('')}</div>`;}
@@ -1621,9 +1619,12 @@ function rAdm(){return`
   <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف</div>
   <div class="content">
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
-      <div style="font-weight:800;margin-bottom:6px;">🔗 للتواصل بمدير البرنامج محمد المعداوى 01003459541</div>
+      <div style="font-weight:800;margin-bottom:6px;">🔗 كيف يدخل زملاؤك على البرنامج؟</div>
       <div style="font-size:12px;line-height:2;color:var(--blue2);">
-       
+        1. اضغط <b>Share / مشاركة</b> أعلى شات Claude وانسخ الرابط.<br>
+        2. أرسل الرابط للموظف يفتحه من Chrome أو Safari.<br>
+        3. أنشئ له حساب من الأسفل بيوزر وباسورد ودور.<br>
+        4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
       </div>
     </div>
     <div class="slabel">إضافة مستخدم</div>
