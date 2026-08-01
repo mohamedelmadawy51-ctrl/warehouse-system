@@ -336,10 +336,27 @@ function startRealTimeSync(){
     const val=snap.val();
     if(val!==null){ DB.counterBalances=val; }
   });
+  FDB.ref(ROOT+'ift_counterLog').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){ DB.counterLog=val; }
+  });
+  FDB.ref(ROOT+'ift_nitrogenBalances').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){ DB.nitrogenBalances=val; }
+  });
+  FDB.ref(ROOT+'ift_counterLabMeta').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){ DB.counterLabMeta=val; }
+  });
+  FDB.ref(ROOT+'ift_settings').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){ DB.settings=val; }
+  });
 }
 function sname(code){const s=DB.sectors.find(x=>x.code===code);return s?s.name:'';}
 function lname(code){const l=DB.labs.find(x=>x.code===code);return l?l.name:'';}
 function cnname(code){const c=DB.counters.find(x=>x.code===code);return c?(c.name?c.code+' — '+c.name:c.code):'';}
+function ccap(code){const c=DB.counters.find(x=>x.code===code);return c&&c.capacity?c.capacity+' لتر':'-';}
 function labsForCustomer(ccode){return DB.labs.filter(l=>l.custCode===ccode);}
 // رصيد المعمل (بعد الصرف): مفتاحه معمل|صنف|باتش تماماً زي رصيد المخزن لكن بكود المعمل بدل كود العميل
 function glb(labCode,icode,batch){return DB.labBalances[bk(labCode,icode,batch)]||0;}
@@ -367,7 +384,7 @@ async function resolveAreaNames(coordsList){
 }
 function uid(p){return p+'-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);}
 
-let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{}};
+let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{}};
 
 /* ============================================================
    نظام الخلفيات الديناميكية — IFT Veterinary
@@ -599,6 +616,10 @@ async function loadDB(){
   DB.counters=await dbGet('ift_counters',[]);
   DB.labBalances=await dbGet('ift_labBalances',{});
   DB.counterBalances=await dbGet('ift_counterBalances',{});
+  DB.counterLog=await dbGet('ift_counterLog',[]);
+  DB.nitrogenBalances=await dbGet('ift_nitrogenBalances',{});
+  DB.counterLabMeta=await dbGet('ift_counterLabMeta',{});
+  DB.settings=await dbGet('ift_settings',{n2DailyLossPct:3,n2MinThreshold:10});
 }
 async function svu(){await dbSet('ift_users',DB.users);}
 async function svc(){await dbSet('ift_customers',DB.customers);}
@@ -608,7 +629,46 @@ async function svla(){await dbSet('ift_labs',DB.labs);}
 async function svco(){await dbSet('ift_counters',DB.counters);}
 async function svlb(){await dbSet('ift_labBalances',DB.labBalances);}
 async function svcb(){await dbSet('ift_counterBalances',DB.counterBalances);}
+async function svcl(){await dbSet('ift_counterLog',DB.counterLog);}
+async function svn2(){await dbSet('ift_nitrogenBalances',DB.nitrogenBalances);}
+async function svclm(){await dbSet('ift_counterLabMeta',DB.counterLabMeta);}
+async function svst(){await dbSet('ift_settings',DB.settings);}
 async function svo(){await dbSet('ift_orders',DB.orders);await dbSet('ift_balances',DB.balances);}
+function n2bal(loc){return DB.nitrogenBalances[loc]||0;}
+
+// حساب حالة كونتر داخل معمل معيّن: الأيام، نسبة الفقد المتوقعة، الكمية المتبقية، هل يحتاج تزويد
+function labCounterStatus(labCode,counterCode){
+  const counter=DB.counters.find(c=>c.code===counterCode);
+  const capacity=counter&&counter.capacity?counter.capacity:0;
+  const meta=DB.counterLabMeta[labCode+'|'+counterCode];
+  const lossRate=(DB.settings.n2DailyLossPct??3)/100;
+  const threshold=DB.settings.n2MinThreshold??10;
+  if(counter&&counter.outOfService){
+    return{since:meta?meta.since:null,days:0,lossPct:0,remaining:0,needsRefill:false,status:'خارج الخدمة'};
+  }
+  if(!meta){
+    return{since:null,days:0,lossPct:0,remaining:0,needsRefill:true,status:'فارغ'};
+  }
+  const days=Math.floor((Date.now()-meta.since)/86400000);
+  const lossPct=Math.min(100,days*lossRate*100);
+  const remaining=Math.max(0,capacity*(1-days*lossRate));
+  const needsRefill=remaining<threshold;
+  let status;
+  if(remaining<=0)status='فارغ';
+  else if(needsRefill)status='يحتاج تزويد';
+  else if(days<=1)status='ممتلئ';
+  else status='جيد';
+  return{since:meta.since,days,lossPct,remaining,needsRefill,status};
+}
+
+// سجل حركات الكونتر — لا يُحذف منه أي شيء أبداً (سجل تاريخي كامل)
+async function logCounterMove(counterCode,reason,qty,locFrom,locTo,n2,note){
+  DB.counterLog.push({
+    id:uid('cl'),counterCode,reason,qty:qty||0,locFrom:locFrom||'',locTo:locTo||'',
+    n2:n2||0,note:note||'',by:S.user?S.user.username:'',byName:S.user?S.user.name:'',at:Date.now()
+  });
+  await svcl();
+}
 
 function findExpiry(cc,ic,batch){
   const matches=DB.orders.filter(o=>o.kind==='addition'&&o.ccode===cc&&o.icode===ic&&(batch?o.batch===batch:true)&&o.expiry&&o.stage!=='rejected');
@@ -781,6 +841,8 @@ function rShell(){
   else if(S.tab==='rep')body=rRep();
   else if(S.tab==='adm')body=rAdm();
   else if(S.tab==='order')body=rOrd();
+  else if(S.tab==='cntlog')body=rCntLog();
+  else if(S.tab==='labcnt')body=rLabCounters();
   return `
   <div class="topbar">
     <div class="brand"><img class="tlogo" src="${LOGO}" alt="IFT">${u.photo?`<img src="${u.photo}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1.5px solid rgba(255,255,255,.4);">`:''}<div><div class="tname">${u.name}</div><div class="trole">${RLBL[u.role]}</div></div></div>
@@ -791,7 +853,7 @@ function rShell(){
   </div>
   ${body}
   <img class="bottom-logo" src="${USERLOGO}" alt="logo">
-  <div class="tabbar">${getTabs().map(t=>`<button data-a="tab" data-tab="${t.k}" class="${(S.tab===t.k||(S.tab==='order'&&t.k==='home'))?'active':''}"><span class="ic">${t.ic}</span>${t.t}</button>`).join('')}</div>`;}
+  <div class="tabbar">${getTabs().map(t=>`<button data-a="tab" data-tab="${t.k}" class="${(S.tab===t.k||(S.tab==='order'&&t.k==='home')||(S.tab==='cntlog'&&t.k==='adm')||(S.tab==='labcnt'&&t.k==='rep'))?'active':''}"><span class="ic">${t.ic}</span>${t.t}</button>`).join('')}</div>`;}
 
 function forRole(u){
   switch(u.role){
@@ -856,7 +918,7 @@ function rHome(){
     {key:'accounts',l:'حسابات العملاء',ic:'🧾',stages:['pending_accounts','return_pending_acc','customer_return_pending_acc'],retStages:['return_pending_acc','customer_return_pending_acc'],roles:['admin','accounts']},
     {key:'cars',l:'السيارات',ic:'🚗',stages:['pending_cars','customer_return_pending_cars'],retStages:['customer_return_pending_cars'],roles:['admin','cars']},
     {key:'warehouse',l:'المخازن',ic:'📦',stages:['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'],retStages:['return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'],roles:['admin','warehouse']},
-    {key:'rep',l:'المندوب',ic:'🧍',stages:['pending_rep','return_pending_rep'],retStages:['return_pending_rep'],roles:['admin','rep']},
+    {key:'rep',l:'المندوب',ic:'🧍',stages:['pending_rep','with_rep','return_pending_rep'],retStages:['return_pending_rep'],roles:['admin','rep']},
   ];
   groups.forEach(g=>{
     g.total=DB.orders.filter(o=>g.stages.includes(o.stage)).length;
@@ -1178,7 +1240,7 @@ function inRng(o,r){
 
 function rRep(){
   const rng=S.rng, u=S.user;
-  const isAdmin = ['admin','accounts','warehouse'].includes(u.role); // الحسابات والمخازن والأدمن يشوفوا كل التقارير، مدخل البيانات يشوف عملاءه فقط
+  const isAdmin = ['admin','accounts','warehouse','quality'].includes(u.role); // الحسابات والمخازن والجودة والأدمن يشوفوا كل التقارير، مدخل البيانات يشوف عملاءه فقط
   // مدخل البيانات يرى فقط العمليات التي أدخلها هو
   const baseList = isAdmin ? DB.orders : DB.orders.filter(o=>o.cby===u.username);
   const list=baseList.filter(o=>inRng(o,rng));
@@ -1199,6 +1261,21 @@ function rRep(){
   <div class="ssub">${isAdmin?'جميع الحركات':u.role==='rep'?'أوردرات التسليم الخاصة بك':'حركاتي وعملائي فقط'} · ${list.length} طلب</div>
   <div class="content">
     ${isAdmin?`
+    <div class="slabel">🧍 أوردرات لا تزال مع المندوبين</div>
+    <div class="card">
+      ${(()=>{
+        const withRep=DB.orders.filter(o=>o.stage==='with_rep'||o.stage==='pending_rep');
+        if(!withRep.length)return `<div style="text-align:center;color:var(--muted);font-size:12px;padding:10px;">لا توجد أوردرات مع المندوبين حالياً</div>`;
+        return withRep.sort((a,b)=>(b.repReceivedAt||b.updAt||0)-(a.repReceivedAt||a.updAt||0)).map(o=>`
+          <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding:8px 0;cursor:pointer;" data-a="open" data-id="${o.id}">
+            <div>
+              <div style="font-weight:800;font-size:12.5px;">${o.cname||o.ccode||''} — ${o.iname||o.icode||''}</div>
+              <div style="font-size:11px;color:var(--muted);">🧍 ${o.repName||'-'} ${o.repReceivedAt?'· منذ '+new Date(o.repReceivedAt).toLocaleString('ar-EG'):''}</div>
+            </div>
+            <span class="tag tw">${o.stage==='with_rep'?'مع المندوب':'بانتظار الاستلام'}</span>
+          </div>`).join('');
+      })()}
+    </div>
     <div class="slabel">📊 لوحة المعلومات</div>
     <div class="grid2" style="margin-bottom:14px;">
       <div class="rbox" style="text-align:center;"><div class="big" style="color:var(--ok)">${qA}</div><div class="lab">إجمالي كمية الإضافة</div></div>
@@ -1367,35 +1444,71 @@ function rRep(){
       })()}</tbody>
     </table></div>
 
-    ${isAdmin?`<div class="slabel">📦 أرصدة الكونترات</div>
+    ${isAdmin?`<div class="slabel">📦 الكونترات</div>
     <div class="card">
-      <div class="brow" style="margin-bottom:10px;"><button class="bs bgo" data-a="rcvcnt" type="button" style="width:100%;">📥 استلام كونتر جديد بالمخزن</button></div>
+      <div class="brow" style="margin-bottom:10px;">
+        <button class="bs bgo" data-a="rcvcnt" type="button">📥 استلام كونتر بالمخزن</button>
+      </div>
+      <button class="bs" data-a="labcnt" type="button" style="width:100%;background:var(--blue);color:#fff;margin-bottom:10px;">📡 فتح شاشة متابعة الكونترات داخل المعامل</button>
       ${DB.counters.length===0?`<div style="text-align:center;color:var(--muted);font-size:12px;">لا توجد كونترات مسجّلة — أضيفي من الإدارة</div>`:
-      DB.counters.map(c=>{
-        const whBal=cbal('WH',c.code);
-        const labsWithCounter=DB.labs.filter(l=>cbal(l.code,c.code)>0);
-        // تجميع حسب العميل (رصيد الكونتر لدى كل عميل = مجموع أرصدته في كل معامله)
-        const byCust={};
-        labsWithCounter.forEach(l=>{
-          byCust[l.custCode]=byCust[l.custCode]||{total:0,labs:[]};
-          byCust[l.custCode].total+=cbal(l.code,c.code);
-          byCust[l.custCode].labs.push(l);
+      DB.counters.map(c=>`<div class="kv" style="cursor:pointer;" data-a="cntlog" data-cnt="${c.code}"><span>${c.status==='ممتلئ'?'🟢':'🔴'} 🎫 ${c.code} ${c.name?'— '+c.name:''}</span><b style="color:var(--ok);">📥 بالمخزن: ${cbal('WH',c.code)}</b></div>`).join('')}
+    </div>
+
+    <div class="slabel">↩️ استرجاع كونتر من معمل</div>
+    <div class="card">
+      <form id="crf">
+        <div class="field"><label>المعمل</label><select name="labCode" id="crlab" required><option value="">اختر المعمل...</option>${DB.labs.filter(l=>DB.counters.some(c=>cbal(l.code,c.code)>0)).map(l=>`<option value="${l.code}">${l.name} (${fc(l.custCode)?.name||l.custCode})</option>`).join('')}</select></div>
+        <div class="field"><label>الكونتر</label><select name="counterCode" id="crcnt" required><option value="">اختاري المعمل أولاً...</option></select></div>
+        <div class="field"><label>الكمية المطلوب استرجاعها</label><input name="qty" id="crqty" type="number" min="1" required></div>
+        <button class="btn-primary" type="submit">بدء دورة الاسترجاع للمخزن</button>
+      </form>
+    </div>`:''}
+
+    ${isAdmin?`<div class="slabel">🧊 أرصدة النتروجين</div>
+    <div class="card">
+      <div class="kv" style="background:var(--blue-lg);border-radius:8px;padding:9px 12px;margin-bottom:10px;">
+        <span style="font-weight:800;">📦 الرصيد الحالي بالمخزن</span><b style="color:var(--ok);font-size:16px;">${n2bal('WH')} لتر</b>
+      </div>
+      <button class="bs bgo" data-a="n2stock" type="button" style="width:100%;margin-bottom:14px;">📥 تزويد رصيد المخزن من النتروجين</button>
+
+      <div style="font-weight:800;font-size:12.5px;margin-bottom:8px;">أرصدة المعامل</div>
+      ${DB.labs.filter(l=>n2bal(l.code)>0).length?
+        DB.labs.filter(l=>n2bal(l.code)>0).map(l=>`<div class="kv"><span>🏭 ${l.name} <span style="color:var(--muted);font-size:10.5px;">(${fc(l.custCode)?.name||l.custCode})</span></span><b>${n2bal(l.code)} لتر</b></div>`).join(''):
+        `<div style="text-align:center;color:var(--muted);font-size:11.5px;padding:8px;">لا يوجد رصيد نتروجين عند أي معمل بعد</div>`}
+    </div>
+
+    <div class="slabel">🧊 تزويد معمل بالنتروجين</div>
+    <div class="card">
+      <form id="n2f">
+        <div class="field"><label>الكونتر</label><select name="counterCode" id="n2cnt" required><option value="">اختر الكونتر...</option>${DB.counters.filter(c=>DB.labs.some(l=>cbal(l.code,c.code)>0)).map(c=>`<option value="${c.code}">${cnname(c.code)} (${ccap(c.code)})</option>`).join('')}</select></div>
+        <div class="field"><label>المعمل</label><select name="labCode" id="n2lab" required><option value="">اختاري الكونتر أولاً...</option></select></div>
+        <div class="field"><label>كمية النتروجين (لتر) — المتاح بالمخزن: ${n2bal('WH')} لتر</label><input name="liters" id="n2liters" type="number" min="0.1" step="0.1" required></div>
+        <button class="btn-primary" type="submit">تزويد وخصم من رصيد المخزن</button>
+      </form>
+    </div>
+
+    <div class="slabel">🧊 تقرير استهلاك النتروجين</div>
+    <div class="pillbar">
+      ${[['month','هذا الشهر'],['year','هذه السنة'],['all','كل الفترات']].map(([v,l])=>`<button data-a="n2per" data-per="${v}" class="${(S.n2Period||'month')===v?'on':''}">${l}</button>`).join('')}
+    </div>
+    <div class="card">
+      ${(()=>{
+        const per=S.n2Period||'month';
+        const now=new Date();
+        const fills=DB.counterLog.filter(l=>l.reason==='تزويد نتروجين'&&l.n2>0).filter(l=>{
+          if(per==='all')return true;
+          const d=new Date(l.at||0);
+          if(per==='month')return d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth();
+          if(per==='year')return d.getFullYear()===now.getFullYear();
+          return true;
         });
-        return `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px;">
-          <div style="display:flex;justify-content:space-between;font-weight:800;font-size:13px;"><span>🎫 ${c.code} ${c.name?'— '+c.name:''}</span><span style="color:var(--ok);">📥 بالمخزن: ${whBal}</span></div>
-          ${Object.keys(byCust).length===0?`<div style="font-size:11px;color:var(--muted);padding-right:10px;margin-top:4px;">لا يوجد رصيد عند أي عميل حالياً</div>`:
-          Object.entries(byCust).map(([ccode,info])=>{
-            const c2=fc(ccode);
-            return `<div style="margin-top:6px;padding-right:8px;">
-              <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:var(--blue2);"><span>👤 ${c2?c2.name:ccode}</span><span>الإجمالي: ${info.total}</span></div>
-              ${info.labs.map(l=>`<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:3px 0 3px 14px;">
-                <span>🏭 ${l.name}</span>
-                <span style="display:flex;align-items:center;gap:6px;">رصيد: ${cbal(l.code,c.code)} <button class="bs" data-a="cntret" data-lab="${l.code}" style="padding:3px 8px;font-size:10px;background:#78350F;color:#fff;">↩️ استرجاع</button></span>
-              </div>`).join('')}
-            </div>`;
-          }).join('')}
-        </div>`;
-      }).join('')}
+        if(!fills.length)return `<div style="text-align:center;color:var(--muted);font-size:12px;padding:14px;">لا توجد عمليات تزويد نتروجين في هذه الفترة</div>`;
+        const byLoc={};
+        fills.forEach(l=>{byLoc[l.locTo||l.locFrom||'-']=(byLoc[l.locTo||l.locFrom||'-']||0)+(+l.n2||0);});
+        const total=Object.values(byLoc).reduce((s,v)=>s+v,0);
+        return `${Object.entries(byLoc).sort((a,b)=>b[1]-a[1]).map(([loc,v])=>`<div class="kv"><span>🏭 ${loc}</span><b style="color:var(--ok);">${v.toFixed(1)} لتر</b></div>`).join('')}
+        <div class="kv" style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px;"><span style="font-weight:800;">الإجمالي الكلي</span><b style="color:var(--blue2);font-size:14px;">${total.toFixed(1)} لتر</b></div>`;
+      })()}
     </div>`:''}
 
     ${(()=>{
@@ -1516,6 +1629,10 @@ function rOrd(){
   }
   if(o.note)flds+=`<div class="kv"><span>ملحوظة</span><b>${o.note}</b></div>`;
   if(o.repName)flds+=`<div class="kv"><span>المندوب</span><b>${o.repName}</b></div>`;
+  if(o.stage==='with_rep'){
+    flds+=`<div class="kv" style="background:var(--warn-bg);border-radius:8px;padding:6px 8px;"><span style="color:var(--warn);font-weight:800;">⚠️ لا يزال مع المندوب</span><b>${o.repReceivedAt?new Date(o.repReceivedAt).toLocaleString('ar-EG'):'-'}</b></div>`;
+  }
+  if(o.repReceivedAt&&o.stage!=='with_rep')flds+=`<div class="kv"><span>وقت استلام المندوب</span><b>${new Date(o.repReceivedAt).toLocaleString('ar-EG')} — ${o.repReceivedBy||''}</b></div>`;
   if(o.carNo)flds+=`<div class="kv"><span>رقم العربية</span><b>${o.carNo}</b></div>`;
   if(o.rejectReason)flds+=`<div class="kv"><span>سبب الرفض</span><b style="color:var(--bad)">${o.rejectReason}</b></div>`;
   if(o.dloc)flds+=`<div class="kv"><span>موقع التسليم</span><b><a href="https://maps.google.com/?q=${o.dloc}" target="_blank" style="color:var(--blue2);">عرض على الخريطة 🗺️</a></b></div>`;
@@ -1615,15 +1732,95 @@ function rOrd(){
     <button class="bs bghost" style="width:100%;margin-top:4px;" data-a="back">⟵ رجوع</button>
   </div>`;}
 
+function rLabCounters(){
+  const q=(S.labCntSrch||'').trim().toLowerCase();
+  let rows=Object.keys(DB.counterLabMeta).map(key=>{
+    const[labCode,counterCode]=key.split('|');
+    const lab=DB.labs.find(l=>l.code===labCode);
+    const counter=DB.counters.find(c=>c.code===counterCode);
+    if(!lab||!counter)return null;
+    const st=labCounterStatus(labCode,counterCode);
+    return{labCode,counterCode,lab,counter,...st};
+  }).filter(Boolean);
+  if(q){
+    rows=rows.filter(r=>r.lab.name.toLowerCase().includes(q)||r.counterCode.toLowerCase().includes(q)||(fc(r.lab.custCode)?.name||'').toLowerCase().includes(q));
+  }
+  rows.sort((a,b)=>(b.since||0)-(a.since||0));
+  const stColor=s=>s==='ممتلئ'?'var(--ok)':s==='جيد'?'var(--blue2)':s==='يحتاج تزويد'?'var(--warn)':s==='خارج الخدمة'?'var(--muted)':'var(--bad)';
+  return`
+  <div class="stitle">📡 متابعة الكونترات داخل المعامل</div>
+  <div class="ssub">${rows.length} كونتر موجود حالياً بالمعامل</div>
+  <div class="content">
+    <div class="field"><input id="lcsi" placeholder="🔎 بحث باسم المعمل أو رقم الكونتر..." value="${q.replace(/"/g,'&quot;')}"></div>
+    ${S.user.role==='admin'?`
+    <div class="card" style="background:var(--blue-lg);border-color:var(--blue2);">
+      <div style="font-weight:800;font-size:12px;margin-bottom:6px;">⚙️ إعدادات الحساب التلقائي</div>
+      <div class="row2">
+        <div class="field"><label>معدل الفقد اليومي (%)</label><input id="lossPctSet" type="number" min="0" step="0.1" value="${DB.settings.n2DailyLossPct??3}"></div>
+        <div class="field"><label>الحد الأدنى قبل التزويد (لتر)</label><input id="minThreshSet" type="number" min="0" step="0.5" value="${DB.settings.n2MinThreshold??10}"></div>
+      </div>
+      <button class="bs bgo" data-a="savesettings" type="button" style="width:100%;">💾 حفظ الإعدادات</button>
+    </div>`:''}
+    ${rows.length===0?`<div class="empty"><div class="ic">📡</div><div class="t">لا توجد كونترات بالمعامل حالياً</div></div>`:
+    `<div style="overflow-x:auto;"><table class="rep">
+      <thead><tr>
+        <th>الكونتر</th><th>المعمل</th><th>تاريخ التسليم</th><th>الأيام</th><th>الفقد المتوقع %</th><th>المتبقي (لتر)</th><th>يحتاج تزويد</th><th>الحالة</th>
+      </tr></thead>
+      <tbody>${rows.map(r=>`<tr style="cursor:pointer;" data-a="cntlog" data-cnt="${r.counterCode}">
+        <td>🎫 ${r.counterCode}</td>
+        <td>🏭 ${r.lab.name}</td>
+        <td>${r.since?new Date(r.since).toLocaleDateString('ar-EG'):'-'}</td>
+        <td>${r.days}</td>
+        <td>${r.lossPct.toFixed(0)}%</td>
+        <td style="font-weight:800;">${r.remaining.toFixed(1)}</td>
+        <td style="color:${r.needsRefill?'var(--bad)':'var(--ok)'};font-weight:800;">${r.needsRefill?'نعم':'لا'}</td>
+        <td style="color:${stColor(r.status)};font-weight:800;">${r.status}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+    ${S.user.role==='admin'?`<button class="bs bghost" style="width:100%;margin-top:12px;" data-a="toggleoos" type="button">🚫 تعليم كونتر "خارج الخدمة" / إلغاء</button>`:''}
+  </div>`;}
+
+function rCntLog(){
+  const code=S.cntLogCode;
+  const counter=DB.counters.find(c=>c.code===code);
+  const q=(S.cntLogSrch||'').trim();
+  let entries=DB.counterLog.filter(l=>l.counterCode===code).sort((a,b)=>(b.at||0)-(a.at||0));
+  if(q){
+    entries=entries.filter(l=>{
+      const d1=new Date(l.at||0).toLocaleDateString('ar-EG');
+      const d2=new Date(l.at||0).toLocaleDateString('en-GB');
+      return d1.includes(q)||d2.includes(q)||(l.reason||'').includes(q)||(l.byName||'').includes(q);
+    });
+  }
+  return`
+  <div class="stitle">🎫 تقرير حركة الكونتر ${code}</div>
+  <div class="ssub">${counter?`${counter.name||''} · ${ccap(code)} · الحالة: ${counter.status==='ممتلئ'?'🟢 ممتلئ':'🔴 فارغ'}`:''} — ${entries.length} حركة</div>
+  <div class="content">
+    <div class="field"><input id="clsi" placeholder="🔎 بحث بالتاريخ أو نوع الحركة أو اسم المستخدم..." value="${q.replace(/"/g,'&quot;')}"></div>
+    ${entries.length===0?`<div class="empty"><div class="ic">📭</div><div class="t">لا توجد حركات مسجّلة لهذا الكونتر بعد</div></div>`:
+    entries.map(l=>`<div class="card">
+      <div class="ch"><div class="ctitle">${l.reason}</div><span class="tag tt">${new Date(l.at||0).toLocaleDateString('ar-EG')}</span></div>
+      <div class="kv"><span>الوقت</span><b>${new Date(l.at||0).toLocaleTimeString('ar-EG')}</b></div>
+      ${l.qty?`<div class="kv"><span>الكمية</span><b>${l.qty}</b></div>`:''}
+      ${l.n2?`<div class="kv"><span>نتروجين (لتر)</span><b>${l.n2}</b></div>`:''}
+      ${l.locFrom?`<div class="kv"><span>من</span><b>${l.locFrom}</b></div>`:''}
+      ${l.locTo?`<div class="kv"><span>إلى</span><b>${l.locTo}</b></div>`:''}
+      <div class="kv"><span>بواسطة</span><b>${l.byName||l.by||'-'}</b></div>
+      ${l.note?`<div class="kv"><span>ملحوظة</span><b style="font-size:11px;">${l.note}</b></div>`:''}
+    </div>`).join('')}
+    <button class="bs bghost" style="width:100%;margin-top:6px;" data-a="tab" data-tab="adm">⟵ رجوع للإدارة</button>
+  </div>`;}
+
 function rAdm(){return`
   <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف</div>
   <div class="content">
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
-      <div style="font-weight:800;margin-bottom:6px;">🔗 مكان مسئول النظام فقط برجاء التواصل من خلال الاتى؟</div>
+      <div style="font-weight:800;margin-bottom:6px;">🔗 كيف يدخل زملاؤك على البرنامج؟</div>
       <div style="font-size:12px;line-height:2;color:var(--blue2);">
-        1. تليفون 01003459541.<br>
-        2. m.elmadawy@ift-onlin.com.<br>
-    
+        1. اضغط <b>Share / مشاركة</b> أعلى شات Claude وانسخ الرابط.<br>
+        2. أرسل الرابط للموظف يفتحه من Chrome أو Safari.<br>
+        3. أنشئ له حساب من الأسفل بيوزر وباسورد ودور.<br>
+        4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
       </div>
     </div>
     <div class="slabel">إضافة مستخدم</div>
@@ -1667,11 +1864,17 @@ function rAdm(){return`
     <div class="slabel">إضافة رقم كونتر / دور</div>
     <form id="acnf">
       <div class="row2"><div class="field"><label>رقم الكونتر</label><input name="code" placeholder="مثال: 12" required></div><div class="field"><label>وصف (اختياري)</label><input name="name" placeholder="مثال: دور الصباح"></div></div>
+      <div class="field"><label>نوع الكونتر (السعة) — ثابت ولا يتغيّر إلا بواسطة المدير</label><select name="capacity" required>
+        <option value="45">🔵 كبير — 45 لتر</option>
+        <option value="30">🟡 صغير — 30 لتر</option>
+      </select></div>
       <div class="field"><label>المسؤول عن الكونتر (مدخل بيانات / مندوب خدمة)</label><select name="owner" required>${DB.users.filter(u2=>u2.role==='data_entry').length?`<option value="">اختر المسؤول...</option>`+DB.users.filter(u2=>u2.role==='data_entry').map(u2=>`<option value="${u2.username}">${u2.name}</option>`).join(''):'<option value="">لا يوجد مدخلي بيانات مسجّلين بعد</option>'}</select></div>
       <button class="btn-primary" type="submit">إضافة الكونتر</button>
     </form>
     <div class="slabel">الكونترات (${DB.counters.length})</div>
-    ${DB.counters.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>🎫 ${c.code} ${c.name?'· '+c.name:''}</span><b>👤 ${u2n(c.owner)||'بدون مسؤول'}</b></div>`).join('')}
+    ${DB.counters.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;cursor:pointer;" data-a="cntlog" data-cnt="${c.code}"><span>${(c.status==='ممتلئ')?'🟢':'🔴'} 🎫 ${c.code} ${c.name?'· '+c.name:''} <span style="color:var(--muted);font-size:10px;">(${ccap(c.code)})</span></span><b>👤 ${u2n(c.owner)||'بدون مسؤول'}</b></div>`).join('')}
+    <div class="slabel">تعديل سعة كونتر (مدير النظام فقط)</div>
+    <button class="bs bghost" style="width:100%;" data-a="editcap" type="button">✏️ تعديل سعة كونتر موجود</button>
   </div>`;}
 
 /* ===== BIND ===== */
@@ -1695,7 +1898,10 @@ function bind(){
       }
     });
   };
-  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);
+  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);
+  const n2cntEl=document.getElementById('n2cnt');if(n2cntEl)n2cntEl.addEventListener('change',()=>updateN2LabOptions(n2cntEl.value));
+  f('crf',onCounterReturn);
+  const crlabEl=document.getElementById('crlab');if(crlabEl)crlabEl.addEventListener('change',()=>updateCRCounterOptions(crlabEl.value));
   lk('ccc','ccn','cclk','c');lk('cic','cin','cilk','i');
   cbbl();
   lk('acc','acn','aclk','c');lk('aic','ain','ailk','i','aisec','aisecval');
@@ -1711,7 +1917,7 @@ function bind(){
     });
   });
   lk('tcc','tcn','tclk','c');lk('tic','tin','tilk','i');
-  bbl();tbbl();bsi();bhsi();checkInvDup();
+  bbl();tbbl();bsi();bhsi();bclsi();blcsi();checkInvDup();
   const af=document.getElementById('atf');if(af)af.addEventListener('change',onAtt);
   const upf=document.getElementById('upf');if(upf)upf.addEventListener('change',onUPhoto);
 }
@@ -1827,6 +2033,14 @@ function bhsi(){
   const el=document.getElementById('hsi');if(!el)return;
   el.addEventListener('input',()=>{S.hsrch=el.value;render();const e2=document.getElementById('hsi');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});
 }
+function bclsi(){
+  const el=document.getElementById('clsi');if(!el)return;
+  el.addEventListener('input',()=>{S.cntLogSrch=el.value;render();const e2=document.getElementById('clsi');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});
+}
+function blcsi(){
+  const el=document.getElementById('lcsi');if(!el)return;
+  el.addEventListener('input',()=>{S.labCntSrch=el.value;render();const e2=document.getElementById('lcsi');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});
+}
 
 async function onAtt(e){
   const file=e.target.files[0];if(!file)return;
@@ -1852,7 +2066,7 @@ async function onUPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','flt','clf','open','back','rrng']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','flt','clf','open','back','rrng','cntlog','n2per','labcnt']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -1864,7 +2078,13 @@ function onA(e){
   else if(a==='cancel'){doCancel(id);}
   else if(a==='custret'){doCustReturn(id);}
   else if(a==='rcvcnt'){doReceiveCounter();}
-  else if(a==='cntret'){doStartCounterReturn(el.dataset.lab);}
+  else if(a==='n2stock'){doStockNitrogen();}
+  else if(a==='savesettings'){doSaveSettings();}
+  else if(a==='toggleoos'){doToggleOOS();}
+  else if(a==='labcnt'){S.tab='labcnt';render();}
+  else if(a==='n2per'){S.n2Period=el.dataset.per;render();}
+  else if(a==='editcap'){doEditCapacity();}
+  else if(a==='cntlog'){S.cntLogCode=el.dataset.cnt;S.tab='cntlog';render();}
   else if(a==='qc'){doQC(id);}
   else if(a==='logout'){S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
   else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;render();}
@@ -2001,6 +2221,10 @@ async function onTrf(e){
     if(DB.counterBalances[flab+'|'+counterCode]===0)delete DB.counterBalances[flab+'|'+counterCode];
     DB.counterBalances[tlab+'|'+counterCode]=(DB.counterBalances[tlab+'|'+counterCode]||0)+counterQty;
     await svcb();
+    delete DB.counterLabMeta[flab+'|'+counterCode];
+    DB.counterLabMeta[tlab+'|'+counterCode]={since:Date.now(),deliveredAt:Date.now()};
+    await svclm();
+    await logCounterMove(counterCode,'تحويل بين معامل',counterQty,labF.name,labT.name,0,'');
   }
   const o={id:uid('lt'),kind:'lab_transfer',stage:'done',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
     ccode:cc,cname:f.get('cn'),flabCode:flab,flabName:labF.name,tlabCode:tlab,tlabName:labT.name,
@@ -2112,9 +2336,12 @@ async function doWH(id){
   if(o.stage==='counter_return_pending_wh'){
     if(o.balAdded){toast('⚠️ تم تأكيد استلام هذا الكونتر مسبقاً');return;}
     DB.counterBalances['WH|'+o.counterCode]=(DB.counterBalances['WH|'+o.counterCode]||0)+(+o.qty);
+    const counterObj=DB.counters.find(c=>c.code===o.counterCode);
+    if(counterObj){counterObj.status='فارغ';}
     o.balAdded=true;
     o.stage='counter_returned';
-    o.updAt=Date.now();await svo();await svcb();
+    o.updAt=Date.now();await svo();await svcb();await svco();
+    await logCounterMove(o.counterCode,'رجوع للمخزن (تأكيد)',o.qty,'في الطريق','المخزن',0,'');
     anim('✅ تم تأكيد استلام الكونتر بالمخزن',()=>{S.tab='home';S.oid=null;});
     return;
   }
@@ -2140,7 +2367,9 @@ async function doRepRet(id){
 
 async function doRRcv(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
-  o.stage='with_rep';o.updAt=Date.now();await svo();
+  o.stage='with_rep';o.updAt=Date.now();
+  o.repReceivedAt=Date.now();o.repReceivedBy=S.user.name;
+  await svo();
   toast('✅ تم تأكيد الاستلام — الطلب الآن معك في الرئيسية');
   S.tab='home';S.oid=null;render();
 }
@@ -2173,6 +2402,10 @@ async function doRDlv(id){
         DB.counterBalances['WH|'+o.counterCode]=(DB.counterBalances['WH|'+o.counterCode]||0)-cq;
         DB.counterBalances[o.labCode+'|'+o.counterCode]=(DB.counterBalances[o.labCode+'|'+o.counterCode]||0)+cq;
         o.counterStatus='تم التسليم';
+        const counterObj=DB.counters.find(c=>c.code===o.counterCode);
+        if(counterObj){counterObj.status='ممتلئ';}
+        DB.counterLabMeta[o.labCode+'|'+o.counterCode]={since:Date.now(),deliveredAt:Date.now()};
+        logCounterMove(o.counterCode,'خروج مع البضاعة',cq,'المخزن',o.labName||o.labCode,0,'أوردر صرف: '+(o.inv||o.id));
       }
     }
     // لو تسليم جزئي → أنشئ أوردر إرجاع تلقائياً (يبدأ بتأكيد المندوب ثم الحسابات ثم المخازن)
@@ -2187,7 +2420,7 @@ async function doRDlv(id){
       };
       DB.orders.push(ret);
     }
-    await svo();await svlb();await svcb();
+    await svo();await svlb();await svcb();await svco();await svclm();
     const msg=retQty>0
       ?`✅ تم تسليم ${dlvQty} — أوردر إرجاع تلقائي للكمية المتبقية (${retQty})`
       :'✅ تم التسليم الكامل وتحديث الرصيد';
@@ -2271,9 +2504,28 @@ async function onAL(e){
 async function onACN(e){
   e.preventDefault();const f=new FormData(e.target);const code=f.get('code').trim();
   const owner=(f.get('owner')||'').trim();
+  const capacity=+(f.get('capacity')||0);
   if(!owner){toast('⛔ الرجاء اختيار المسؤول عن الكونتر');return;}
+  if(!capacity){toast('⛔ الرجاء اختيار نوع الكونتر (السعة)');return;}
   if(DB.counters.some(c=>c.code===code)){toast('رقم الكونتر ده مُستخدم من قبل');return;}
-  DB.counters.push({code,name:f.get('name')||'',owner});await svco();toast('تم إضافة الكونتر');e.target.reset();render();
+  DB.counters.push({code,name:f.get('name')||'',owner,capacity,status:'فارغ'});await svco();
+  await logCounterMove(code,'إنشاء كونتر جديد',0,'','','','تسجيل كونتر جديد بالنظام — السعة: '+capacity+' لتر');
+  toast('تم إضافة الكونتر');e.target.reset();render();
+}
+
+async function doEditCapacity(){
+  if(!DB.counters.length){toast('لا توجد كونترات مسجّلة');return;}
+  const list=DB.counters.map(c=>`${c.code} (حالياً: ${c.capacity||'-'} لتر)`).join('\n');
+  const code=prompt(`تعديل سعة كونتر — مدير النظام فقط\nالكونترات:\n${list}\nاكتب كود الكونتر:`);
+  if(!code)return;
+  const counter=DB.counters.find(c=>c.code===code.trim());
+  if(!counter){toast('⛔ كود الكونتر غير موجود');return;}
+  const newCap=+prompt('أدخل السعة الجديدة باللتر (45 كبير / 30 صغير):'||0);
+  if(!newCap){toast('لم يتم تحديد سعة');return;}
+  const old=counter.capacity;
+  counter.capacity=newCap;await svco();
+  await logCounterMove(counter.code,'تعديل السعة',0,'','',0,`تم تغيير السعة من ${old||'-'} إلى ${newCap} لتر بواسطة المدير`);
+  toast('✅ تم تحديث السعة');render();
 }
 
 async function doQC(id){
@@ -2285,33 +2537,107 @@ async function doQC(id){
   await svo();toast('✅ تم حفظ ملاحظة الجودة');render();
 }
 
-async function doStartCounterReturn(labCode){
-  const lab=DB.labs.find(l=>l.code===labCode);if(!lab)return;
-  const withThisLab=DB.counters.filter(c=>cbal(labCode,c.code)>0);
-  if(!withThisLab.length){toast('لا يوجد كونترات مسجّلة برصيد عند هذا المعمل');return;}
-  const list=withThisLab.map(c=>`${c.code} (المتاح: ${cbal(labCode,c.code)})`).join('\n');
-  const code=prompt(`استرجاع كونتر من معمل ${lab.name}\nالكونترات المتاحة:\n${list}\nاكتب كود الكونتر:`);
+async function doSaveSettings(){
+  const lossPct=+(document.getElementById('lossPctSet')||{}).value;
+  const minThresh=+(document.getElementById('minThreshSet')||{}).value;
+  if(isNaN(lossPct)||isNaN(minThresh)||lossPct<0||minThresh<0){toast('⛔ قيم غير صحيحة');return;}
+  DB.settings.n2DailyLossPct=lossPct;
+  DB.settings.n2MinThreshold=minThresh;
+  await svst();
+  toast('✅ تم حفظ الإعدادات');render();
+}
+
+async function doToggleOOS(){
+  if(!DB.counters.length){toast('لا توجد كونترات مسجّلة');return;}
+  const list=DB.counters.map(c=>`${c.code} — ${c.outOfService?'🚫 خارج الخدمة':'✅ شغال'}`).join('\n');
+  const code=prompt(`اكتب كود الكونتر لتبديل حالة "خارج الخدمة":\n${list}`);
   if(!code)return;
   const counter=DB.counters.find(c=>c.code===code.trim());
   if(!counter){toast('⛔ كود الكونتر غير موجود');return;}
+  counter.outOfService=!counter.outOfService;
+  await svco();
+  await logCounterMove(counter.code,counter.outOfService?'تعليم خارج الخدمة':'إلغاء خارج الخدمة',0,'','',0,'');
+  toast(counter.outOfService?`🚫 تم تعليم ${counter.code} كخارج الخدمة`:`✅ تم إلغاء وضع خارج الخدمة عن ${counter.code}`);render();
+}
+
+async function doStockNitrogen(){
+  const qty=+prompt(`الرصيد الحالي بالمخزن: ${n2bal('WH')} لتر\nأدخل كمية النتروجين المضافة لرصيد المخزن (باللتر):`||0);
+  if(!qty||qty<=0){toast('لم يتم تحديد كمية');return;}
+  DB.nitrogenBalances['WH']=n2bal('WH')+qty;
+  await svn2();
+  toast(`✅ تم إضافة ${qty} لتر لرصيد النتروجين بالمخزن`);render();
+}
+
+function updateN2LabOptions(counterCode){
+  const sel=document.getElementById('n2lab');if(!sel)return;
+  if(!counterCode){sel.innerHTML='<option value="">اختاري الكونتر أولاً...</option>';return;}
+  const labsWithIt=DB.labs.filter(l=>cbal(l.code,counterCode)>0);
+  if(!labsWithIt.length){sel.innerHTML='<option value="">هذا الكونتر غير موجود حالياً عند أي معمل</option>';return;}
+  sel.innerHTML='<option value="">اختر المعمل...</option>'+labsWithIt.map(l=>`<option value="${l.code}">${l.name} (رصيد نتروجين حالي: ${n2bal(l.code)} لتر)</option>`).join('');
+}
+
+async function onN2Fill(e){
+  e.preventDefault();const f=new FormData(e.target);
+  const counterCode=f.get('counterCode')?.trim(),labCode=f.get('labCode')?.trim(),liters=+f.get('liters')||0;
+  if(!counterCode){toast('⛔ اختاري الكونتر');return;}
+  if(!labCode){toast('⛔ اختاري المعمل');return;}
+  if(!liters||liters<=0){toast('⛔ أدخلي كمية نتروجين صحيحة');return;}
+  const counter=DB.counters.find(c=>c.code===counterCode);
+  if(!counter){toast('⛔ الكونتر غير موجود');return;}
+  if(counter.owner&&counter.owner!==S.user.username&&S.user.role!=='admin'){
+    toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط`);return;
+  }
+  const lab=DB.labs.find(l=>l.code===labCode);
+  if(!lab){toast('⛔ المعمل غير موجود');return;}
+  if(cbal(labCode,counterCode)<=0){toast('⛔ هذا الكونتر غير موجود حالياً عند هذا المعمل');return;}
+  if(liters>n2bal('WH')){toast(`⛔ الكمية المطلوبة (${liters}) أكبر من رصيد المخزن المتاح (${n2bal('WH')})`);return;}
+  DB.nitrogenBalances['WH']=n2bal('WH')-liters;
+  DB.nitrogenBalances[labCode]=n2bal(labCode)+liters;
+  await svn2();
+  counter.status='ممتلئ';await svco();
+  DB.counterLabMeta[labCode+'|'+counterCode]={...(DB.counterLabMeta[labCode+'|'+counterCode]||{}),since:Date.now()};
+  await svclm();
+  await logCounterMove(counter.code,'تزويد نتروجين',0,'المخزن',lab.name,liters,'خُصم من رصيد نتروجين المخزن');
+  toast(`✅ تم تزويد ${liters} لتر لمعمل ${lab.name} وخصمها من المخزن`);e.target.reset();render();
+}
+
+function updateCRCounterOptions(labCode){
+  const sel=document.getElementById('crcnt');if(!sel)return;
+  if(!labCode){sel.innerHTML='<option value="">اختاري المعمل أولاً...</option>';return;}
+  const withThisLab=DB.counters.filter(c=>cbal(labCode,c.code)>0);
+  if(!withThisLab.length){sel.innerHTML='<option value="">لا توجد كونترات عند هذا المعمل</option>';return;}
+  sel.innerHTML='<option value="">اختر الكونتر...</option>'+withThisLab.map(c=>`<option value="${c.code}">${cnname(c.code)} (المتاح: ${cbal(labCode,c.code)})</option>`).join('');
+}
+
+async function onCounterReturn(e){
+  e.preventDefault();const f=new FormData(e.target);
+  const labCode=f.get('labCode')?.trim(),counterCode=f.get('counterCode')?.trim(),qty=+f.get('qty')||0;
+  if(!labCode){toast('⛔ اختاري المعمل');return;}
+  if(!counterCode){toast('⛔ اختاري الكونتر');return;}
+  if(!qty||qty<=0){toast('⛔ أدخلي كمية صحيحة');return;}
+  const lab=DB.labs.find(l=>l.code===labCode);if(!lab){toast('⛔ المعمل غير موجود');return;}
+  const counter=DB.counters.find(c=>c.code===counterCode);if(!counter){toast('⛔ الكونتر غير موجود');return;}
   if(counter.owner&&counter.owner!==S.user.username&&S.user.role!=='admin'){
     toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط — هو المخوّل باسترجاعه`);return;
   }
   const avail=cbal(labCode,counter.code);
-  if(avail<=0){toast('لا يوجد رصيد لهذا الكونتر عند هذا المعمل');return;}
-  const qty=+prompt(`الرصيد المتاح: ${avail}\nأدخل الكمية المطلوب استرجاعها:`||0);
-  if(!qty||qty<=0){toast('لم يتم تحديد كمية');return;}
+  if(avail<=0){toast('⛔ لا يوجد رصيد لهذا الكونتر عند هذا المعمل');return;}
   if(qty>avail){toast(`⛔ الكمية أكبر من المتاح (${avail})`);return;}
   DB.counterBalances[labCode+'|'+counter.code]=avail-qty;
-  if(DB.counterBalances[labCode+'|'+counter.code]===0)delete DB.counterBalances[labCode+'|'+counter.code];
+  if(DB.counterBalances[labCode+'|'+counter.code]===0){
+    delete DB.counterBalances[labCode+'|'+counter.code];
+    delete DB.counterLabMeta[labCode+'|'+counter.code];
+    await svclm();
+  }
   await svcb();
+  await logCounterMove(counter.code,'رجوع للمخزن (بدء)',qty,lab.name,'في الطريق للمخزن',0,'');
   const o={id:uid('cr'),kind:'counter_return',stage:'counter_return_pending_wh',
     cby:S.user.username,cbyn:S.user.name,createdAt:Date.now(),updAt:Date.now(),
     ccode:lab.custCode,cname:fc(lab.custCode)?.name||'',labCode,labName:lab.name,
     counterCode:counter.code,counterName:cnname(counter.code),qty,
     note:'استرجاع كونتر من معمل '+lab.name};
   DB.orders.push(o);await svo();
-  toast('✅ تم بدء دورة استرجاع الكونتر — بانتظار تأكيد المخزن');S.tab='home';render();
+  toast('✅ تم بدء دورة استرجاع الكونتر — بانتظار تأكيد المخزن');e.target.reset();render();
 }
 
 async function doReceiveCounter(){
@@ -2325,6 +2651,7 @@ async function doReceiveCounter(){
   if(!qty||qty<=0){toast('لم يتم تحديد كمية');return;}
   DB.counterBalances['WH|'+counter.code]=(DB.counterBalances['WH|'+counter.code]||0)+qty;
   await svcb();
+  await logCounterMove(counter.code,'استلام بالمخزن',qty,'',' المخزن',0,'');
   toast(`✅ تم إضافة ${qty} إلى رصيد الكونتر بالمخزن`);render();
 }
 
