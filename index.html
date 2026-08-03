@@ -698,6 +698,21 @@ const SLBL={draft:'مسودة',pending_accounts:'بانتظار الحسابات
   return_pending_rep:'مرتجع — بانتظار تأكيد المندوب',return_pending_acc:'مرتجع — بانتظار الحسابات',return_pending_wh:'مرتجع — بانتظار استلام المخازن',returned:'تم تأكيد الإرجاع وإضافة الرصيد ✅',
   customer_return_pending_acc:'سحوبات — بانتظار الحسابات',customer_return_pending_cars:'سحوبات — بانتظار السيارات',customer_return_pending_wh:'سحوبات — بانتظار تأكيد المخزن',customer_returned:'تم تنفيذ السحوبات وخصم الرصيد ✅',
   done:'تم التنفيذ ✅',counter_return_pending_wh:'كونتر — قيد الإرجاع للمخزن',counter_returned:'كونتر — تم الإرجاع للمخزن ✅'};
+// مسميات حالة مخصّصة للأوردر العادي (SMS) — بمصطلحات بيع عادية بدل مصطلحات الأمانة
+const SLBL_REGULAR={
+  draft:'مسودة',
+  pending_accounts:'قيد التنفيذ — بانتظار الفاتورة من الحسابات',
+  rejected:'مرفوض',
+  pending_cars:'تم عمل الفاتورة من حسابات العملاء — قيد التنفيذ',
+  pending_warehouse:'قيد التنفيذ — بالمخزن',
+  pending_rep:'قيد التنفيذ — بانتظار استلام المندوب',
+  with_rep:'تم الاستلام من المندوب',
+  delivered:'تم التنفيذ والتسليم — تم التسليم للعميل ✅'
+};
+function stageLabel(o){
+  if(o&&o.kind==='withdrawal'&&o.orderType==='regular'&&SLBL_REGULAR[o.stage])return SLBL_REGULAR[o.stage];
+  return SLBL[o.stage]||o.stage;
+}
 // مسارات مختلفة حسب نوع الحركة
 const ADD_STEPS=[{l:'إدخال'},{l:'حسابات'},{l:'مخازن'}];
 const WD_STEPS=[{l:'إدخال'},{l:'حسابات'},{l:'سيارات'},{l:'مخازن'},{l:'مندوب'},{l:'تسليم'}];
@@ -708,7 +723,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null};
 let pendAtt=null;
 let pendUPhoto=null;
 let _actionLock=false;
@@ -880,11 +895,11 @@ function otitle(o){
 
 function rCard(o){
   const tc=o.kind==='addition'?'ta':o.kind==='withdrawal'?'tw':(o.kind==='return'||o.kind==='customer_return')?'tw':'tt';
-  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
+  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي':'صرف'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
   const sc=o.stage==='rejected'?'var(--bad)':(o.stage==='delivered'||o.stage==='approved'||o.stage==='returned'||o.stage==='customer_returned')?'var(--ok)':'var(--warn)';
   return `<div class="card" data-a="open" data-id="${o.id}">
     <div class="ch"><div><div class="ctitle">${otitle(o)}</div><div class="cmeta">${o.inv?'SO: '+o.inv+' · ':''}${o.cname||o.fcname||''}</div></div><span class="tag ${tc}">${tt}</span></div>
-    <div class="kv"><span>الحالة</span><b style="color:${sc}">${SLBL[o.stage]}</b></div>
+    <div class="kv"><span>الحالة</span><b style="color:${sc}">${stageLabel(o)}</b></div>
     <div class="kv"><span>الكمية</span><b>${o.qty||'-'}</b></div>
     <div class="kv"><span>بواسطة</span><b>${o.cbyn||o.cby||'-'}</b></div>
     ${rTrk(o)}</div>`;}
@@ -1050,7 +1065,15 @@ function rAddF(){return`
   <div class="field"><label>الكمية</label><input name="qty" type="number" min="1" required></div>
   <div class="field"><label>ملحوظة</label><textarea name="note" rows="2"></textarea></div>`;}
 
-function rSubF(){return`
+function rSubF(){
+  const wt=S.wtype||'amanah';
+  return`
+  <div class="segtog" style="margin-bottom:14px;">
+    <button type="button" data-a="wtype" data-wt="amanah" class="${wt==='amanah'?'on':''}">📦 صرف من الأمانة</button>
+    <button type="button" data-a="wtype" data-wt="regular" class="${wt==='regular'?'on':''}">🧾 أوردر عادي</button>
+  </div>
+  <input type="hidden" name="orderType" value="${wt}">
+  ${wt==='regular'?`<div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;">ℹ️ الأوردر العادي بيمشي بنفس خطوات الموافقة، لكنه لا يخصم من رصيد أمانة العميل ولا يُسجَّل في أرصدة المعامل.</div>`:''}
   <div class="row2">
     <div class="field"><label>كود العميل</label><input name="cc" id="scc" required></div>
     <div class="field"><label>اسم العميل</label><input name="cn" id="scn" readonly></div>
@@ -1062,10 +1085,11 @@ function rSubF(){return`
   </div>
   <div id="silk" class="lkname"></div>
   <div id="sisec" style="margin:-6px 0 10px;"></div><input type="hidden" name="sector" id="sisecval">
-  <div class="field"><label>الباتش المطلوب صرفه</label><input name="batch" id="sbatch" placeholder="اكتب رقم الباتش لعرض رصيده" required></div>
-  <div id="balbx" class="balbox">أدخل كود العميل والصنف لعرض الرصيد المتاح حالياً</div>
-  <div id="batchlist"></div>
+  <div class="field"><label>الباتش${wt==='regular'?' (اختياري)':' المطلوب صرفه'}</label><input name="batch" id="sbatch" placeholder="اكتب رقم الباتش لعرض رصيده" ${wt==='amanah'?'required':''}></div>
+  ${wt==='amanah'?`<div id="balbx" class="balbox">أدخل كود العميل والصنف لعرض الرصيد المتاح حالياً</div>
+  <div id="batchlist"></div>`:''}
   <div class="field"><label>الكمية المطلوبة</label><input name="qty" type="number" min="1" id="sqty" required></div>
+  ${wt==='amanah'?`
   <div class="row2">
     <div class="field"><label>معمل العميل</label><select name="labCode" id="slab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
     <div class="field"><label>الكونتر / الدور</label><select name="counterCode" id="scounter">${DB.counters.length?`<option value="">بدون كونتر</option>`+DB.counters.map(c=>`<option value="${c.code}">${cnname(c.code)}</option>`).join(''):'<option value="">لا توجد كونترات مسجّلة</option>'}</select></div>
@@ -1073,7 +1097,7 @@ function rSubF(){return`
   <div class="row2">
     <div class="field"><label>هل يخرج الكونتر مع البضاعة للعميل؟</label><select name="counterWithGoods" id="scwg"><option value="yes">✅ نعم — يسلَّم مع البضاعة</option><option value="no">❌ لا — البضاعة فقط بدون الكونتر</option></select></div>
     <div class="field"><label>عدد الكونترات</label><input name="counterQty" id="scqty" type="number" min="1" value="1"></div>
-  </div>
+  </div>`:''}
   <div class="field"><label>ملحوظة</label><textarea name="note" rows="2"></textarea></div>`;}
 
 function updateLabOptions(cc){
@@ -1244,9 +1268,10 @@ function rRep(){
   // مدخل البيانات يرى فقط العمليات التي أدخلها هو
   const baseList = isAdmin ? DB.orders : DB.orders.filter(o=>o.cby===u.username);
   const list=baseList.filter(o=>inRng(o,rng));
-  const adds=list.filter(o=>o.kind==='addition'),subs=list.filter(o=>o.kind==='withdrawal'),trs=list.filter(o=>o.kind==='transfer');
+  const adds=list.filter(o=>o.kind==='addition'),subs=list.filter(o=>o.kind==='withdrawal'&&o.orderType!=='regular'),trs=list.filter(o=>o.kind==='transfer');
+  const regOrders=list.filter(o=>o.kind==='withdrawal'&&o.orderType==='regular');
   const done=list.filter(o=>o.stage==='delivered'||o.stage==='approved'),rej=list.filter(o=>o.stage==='rejected');
-  const qA=adds.reduce((s,o)=>s+(+o.qty||0),0),qS=subs.reduce((s,o)=>s+(+o.qty||0),0);
+  const qA=adds.reduce((s,o)=>s+(+o.qty||0),0),qS=subs.reduce((s,o)=>s+(+o.qty||0),0),qReg=regOrders.reduce((s,o)=>s+(+o.qty||0),0);
   const today=new Date();
   const expItems=(isAdmin?DB.orders:DB.orders.filter(o=>o.cby===u.username))
     .filter(o=>o.kind==='addition'&&o.expiry&&o.stage!=='delivered')
@@ -1397,9 +1422,20 @@ function rRep(){
     </div>
     <div class="grid3" style="margin-top:8px;">
       <div class="rbox" style="text-align:center;"><div class="big">${adds.length}</div><div class="lab">إضافة (${qA})</div></div>
-      <div class="rbox" style="text-align:center;"><div class="big">${subs.length}</div><div class="lab">صرف (${qS})</div></div>
+      <div class="rbox" style="text-align:center;"><div class="big">${subs.length}</div><div class="lab">صرف أمانة (${qS})</div></div>
       <div class="rbox" style="text-align:center;"><div class="big">${trs.length}</div><div class="lab">تحويلات</div></div>
     </div>
+    <div class="grid2" style="margin-top:8px;">
+      <div class="rbox" style="text-align:center;"><div class="big" style="color:var(--warn)">${regOrders.length}</div><div class="lab">🧾 أوردر عادي (SMS) — كمية: ${qReg}</div></div>
+    </div>
+    ${regOrders.length?`<div class="slabel">🧾 تقرير الأوردرات العادية (SMS)</div>
+    <div class="card">
+      ${regOrders.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0,20).map(o=>`<div class="kv" style="cursor:pointer;" data-a="open" data-id="${o.id}">
+        <span>${o.cname||o.ccode} — ${o.iname||o.icode} <span style="color:var(--muted);font-size:10px;">(${new Date(o.createdAt||0).toLocaleDateString('ar-EG')})</span></span>
+        <b style="color:${o.stage==='rejected'?'var(--bad)':o.stage==='delivered'?'var(--ok)':'var(--warn)'};">${stageLabel(o)}</b>
+      </div>`).join('')}
+      ${regOrders.length>20?`<div style="text-align:center;color:var(--muted);font-size:11px;margin-top:6px;">و${regOrders.length-20} أوردر آخر...</div>`:''}
+    </div>`:''}
     <div class="brow" style="margin-top:12px;">
       <button class="bs bgo" data-a="xls">📥 تصدير Excel</button>
       <button class="bs bghost" data-a="pdf">🖨️ طباعة PDF</button>
@@ -1562,7 +1598,7 @@ function rRep(){
         const d=new Date(o.createdAt||Date.now()).toLocaleDateString('ar-EG',{day:'2-digit',month:'2-digit',year:'numeric'});
         const kl=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':'تحويل';
         const sc=o.stage==='rejected'?'var(--bad)':(o.stage==='delivered'||o.stage==='approved')?'var(--ok)':'var(--warn)';
-        return`<tr><td>${d}</td><td>${kl}</td><td>${o.inv||'-'}</td><td>${o.cname||o.fcname||o.ccode||'-'}</td><td>${o.iname||o.icode||'-'}</td><td>${o.qty||'-'}</td><td style="color:${sc};font-weight:700;">${SLBL[o.stage]}</td><td>${o.cbyn||'-'}</td></tr>`;
+        return`<tr><td>${d}</td><td>${kl}</td><td>${o.inv||'-'}</td><td>${o.cname||o.fcname||o.ccode||'-'}</td><td>${o.iname||o.icode||'-'}</td><td>${o.qty||'-'}</td><td style="color:${sc};font-weight:700;">${stageLabel(o)}</td><td>${o.cbyn||'-'}</td></tr>`;
       }).join('')}</tbody>
     </table></div>
   </div>`;}
@@ -1616,16 +1652,18 @@ function rOrd(){
     <div class="kv"><span>الانتهاء</span><b>${o.expiry||'-'}</b></div>
     <div class="kv"><span>الكمية</span><b>${o.qty}</b></div>`;
   }else{
-    const bal=gb(o.ccode,o.icode);
-    flds=`<div class="kv"><span>العميل</span><b>${o.ccode} — ${o.cname||''}</b></div>
+    const isRegular=o.orderType==='regular';
+    const bal=isRegular?0:gb(o.ccode,o.icode);
+    flds=`<div class="kv"><span>نوع الأوردر</span><b style="color:${isRegular?'var(--warn)':'var(--ok)'}">${isRegular?'🧾 أوردر عادي (لا يمس الأمانة)':'📦 صرف من الأمانة'}</b></div>
+    <div class="kv"><span>العميل</span><b>${o.ccode} — ${o.cname||''}</b></div>
     <div class="kv"><span>الصنف</span><b>${o.icode} — ${o.iname||''}</b></div>
     <div class="kv"><span>القطاع</span><b>${o.sectorName||sname(o.sector)||'-'}</b></div>
     <div class="kv"><span>الكمية المطلوبة</span><b>${o.qty}</b></div>
-    <div class="kv"><span>الرصيد المتبقي</span><b style="color:${bal>0?'var(--ok)':'var(--bad)'}">${bal}</b></div>
+    ${!isRegular?`<div class="kv"><span>الرصيد المتبقي</span><b style="color:${bal>0?'var(--ok)':'var(--bad)'}">${bal}</b></div>`:''}
     <div class="kv"><span>الباتش</span><b>${o.batch||'-'}</b></div>
-    <div class="kv"><span>الكونتر / الدور</span><b>${o.counterName||o.counterCode||'-'}</b></div>
+    ${!isRegular?`<div class="kv"><span>الكونتر / الدور</span><b>${o.counterName||o.counterCode||'-'}</b></div>
     <div class="kv"><span>المعمل الحالي</span><b>🏭 ${o.labName||'-'}</b></div>
-    ${o.labHistory&&o.labHistory.length?`<div class="kv"><span>سجل تحويل المعمل</span><b style="font-size:11px;">${o.labHistory.map(h=>`${h.from}→${h.to}`).join(' | ')}</b></div>`:''}`;
+    ${o.labHistory&&o.labHistory.length?`<div class="kv"><span>سجل تحويل المعمل</span><b style="font-size:11px;">${o.labHistory.map(h=>`${h.from}→${h.to}`).join(' | ')}</b></div>`:''}`:''}`;
   }
   if(o.note)flds+=`<div class="kv"><span>ملحوظة</span><b>${o.note}</b></div>`;
   if(o.repName)flds+=`<div class="kv"><span>المندوب</span><b>${o.repName}</b></div>`;
@@ -1698,7 +1736,7 @@ function rOrd(){
   }
 
   // إتاحة "سحوبات" (سحب جزئي من الرصيد في أي وقت) من أوردر إضافة تم اعتماده، أو من أوردر صرف تم تسليمه
-  const canRecall=((o.kind==='addition'&&o.stage==='approved')||(o.kind==='withdrawal'&&o.stage==='delivered'))&&(ia||u.role==='data_entry');
+  const canRecall=((o.kind==='addition'&&o.stage==='approved')||(o.kind==='withdrawal'&&o.stage==='delivered'&&o.orderType!=='regular'))&&(ia||u.role==='data_entry');
   if(canRecall){
     acts += `<div class="brow" style="margin-top:6px;">
       <button class="bs" data-a="custret" data-id="${o.id}" style="background:#78350F;color:#fff;border-radius:9px;padding:10px;font-weight:800;width:100%;">
@@ -1708,14 +1746,14 @@ function rOrd(){
   }
 
   const tc=o.kind==='addition'?'ta':(o.kind==='withdrawal'||o.kind==='return'||o.kind==='customer_return')?'tw':'tt';
-  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
+  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي':'صرف'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
   const sc=(o.stage==='rejected')?'var(--bad)':(o.stage==='delivered'||o.stage==='approved'||o.stage==='returned'||o.stage==='customer_returned')?'var(--ok)':'var(--warn)';
   const qcOpts=['','مقبول','مرفوض','تحت الفحص','تالف'];
   return`
   <div class="stitle">تفاصيل الطلب</div><div class="ssub">${otitle(o)}</div>
   <div class="content">
     <div class="card">
-      <div class="ch"><span class="tag ${tc}">${tt}</span><b style="color:${sc}">${SLBL[o.stage]}</b></div>
+      <div class="ch"><span class="tag ${tc}">${tt}</span><b style="color:${sc}">${stageLabel(o)}</b></div>
       ${rTrk(o)}
       <div style="margin-top:12px;">${flds}</div>
       ${att}${acts}
@@ -2066,7 +2104,7 @@ async function onUPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','flt','clf','open','back','rrng','cntlog','n2per','labcnt']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -2089,6 +2127,7 @@ function onA(e){
   else if(a==='logout'){S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
   else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;render();}
   else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;render();}
+  else if(a==='wtype'){S.wtype=el.dataset.wt;render();}
   else if(a==='flt'){if(S.user.role==='admin'){S.hflt=el.dataset.stage.split(',');S.hfltLabel=el.dataset.label||'';render();}}
   else if(a==='clf'){S.hflt=null;S.hfltLabel='';render();}
   else if(a==='open'){S.oid=id;S.tab='order';render();}
@@ -2143,8 +2182,9 @@ async function onNew(e){
     const dup=DB.orders.some(o=>o.kind==='addition'&&o.stage!=='rejected'&&(o.inv||'').trim().toLowerCase()===inv.toLowerCase());
     if(dup){toast(`⛔ رقم الأمر "${inv}" مُستخدم من قبل — لا يمكن تكراره`);return;}
   }
-  if(kind==='withdrawal'){
-    // تحقق: مدخل البيانات لا يصرف لعميل لم يضفه هو
+  const orderType=kind==='withdrawal'?(f.get('orderType')||'amanah'):'';
+  if(kind==='withdrawal'&&orderType==='amanah'){
+    // تحقق: مدخل البيانات لا يصرف لعميل لم يضفه هو (بس لصرف الأمانة اللي بيخصم من رصيد حقيقي)
     if(u.role==='data_entry'){
       const hasAdded=DB.orders.some(o=>o.kind==='addition'&&o.cby===u.username&&o.ccode===cc&&o.icode===ic&&o.stage!=='rejected');
       if(!hasAdded){toast('⛔ لا يمكنك الصرف لعميل لم تسجّل له إضافة بنفسك');return;}
@@ -2162,9 +2202,9 @@ async function onNew(e){
   const counterCode=(f.get('counterCode')||'').trim();
   const counterWithGoods=(f.get('counterWithGoods')||'yes')==='yes';
   const counterQty=+(f.get('counterQty')||1);
-  if(kind==='withdrawal'&&!labCode){toast('⛔ الرجاء اختيار معمل العميل (لازم يكون مسجّل للعميل ده من الإدارة أولاً)');return;}
-  if(kind==='withdrawal'&&labCode&&!labsForCustomer(cc).some(l=>l.code===labCode)){toast('⛔ هذا المعمل غير تابع لهذا العميل');return;}
-  if(kind==='withdrawal'&&counterCode){
+  if(kind==='withdrawal'&&orderType==='amanah'&&!labCode){toast('⛔ الرجاء اختيار معمل العميل (لازم يكون مسجّل للعميل ده من الإدارة أولاً)');return;}
+  if(kind==='withdrawal'&&orderType==='amanah'&&labCode&&!labsForCustomer(cc).some(l=>l.code===labCode)){toast('⛔ هذا المعمل غير تابع لهذا العميل');return;}
+  if(kind==='withdrawal'&&orderType==='amanah'&&counterCode){
     const counter=DB.counters.find(x=>x.code===counterCode);
     if(counter&&counter.owner&&counter.owner!==u.username&&u.role!=='admin'){
       toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط — لا يمكنك صرفه`);return;
@@ -2173,11 +2213,13 @@ async function onNew(e){
   const o={id:uid('o'),kind,stage:'pending_accounts',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
     inv:f.get('inv')||'',ccode:cc,cname:f.get('cn'),icode:ic,iname:f.get('iname'),
     batch:f.get('batch'),expiry:f.get('expiry'),qty,note:f.get('note')||'',
-    labCode,labName:lname(labCode),
-    counterCode,counterName:counterCode?cnname(counterCode):'',counterWithGoods,counterQty,
+    orderType,
+    labCode:orderType==='amanah'?labCode:'',labName:orderType==='amanah'?lname(labCode):'',
+    counterCode:orderType==='amanah'?counterCode:'',counterName:(orderType==='amanah'&&counterCode)?cnname(counterCode):'',
+    counterWithGoods,counterQty,
     sector,sectorName:sname(sector)};
   if(pendAtt)o.att=pendAtt;
-  // *** الرصيد لا يُضاف هنا — يُضاف فقط عندما يؤكد المخزن استلام البضاعة ***
+  // *** الرصيد لا يُضاف هنا — يُضاف فقط عندما يؤكد المخزن استلام البضاعة (ولا يُضاف نهائياً للأوردر العادي) ***
   DB.orders.push(o);await svo();pendAtt=null;
   anim('جارِ الإرسال إلى حسابات العملاء',()=>{S.tab='home';S.oid=null;});
 }
@@ -2387,7 +2429,7 @@ async function doRDlv(id){
     o.dlvQty=dlvQty;
     o.retQty=retQty;
     o.dloc=loc||null;
-    if(o.kind==='withdrawal'){
+    if(o.kind==='withdrawal'&&o.orderType!=='regular'){
       const k=bk(o.ccode,o.icode,o.batch);
       DB.balances[k]=(DB.balances[k]||0)-(+o.qty);
       o.balDeducted=true;
@@ -2408,8 +2450,8 @@ async function doRDlv(id){
         logCounterMove(o.counterCode,'خروج مع البضاعة',cq,'المخزن',o.labName||o.labCode,0,'أوردر صرف: '+(o.inv||o.id));
       }
     }
-    // لو تسليم جزئي → أنشئ أوردر إرجاع تلقائياً (يبدأ بتأكيد المندوب ثم الحسابات ثم المخازن)
-    if(retQty>0){
+    // لو تسليم جزئي → أنشئ أوردر إرجاع تلقائياً (يبدأ بتأكيد المندوب ثم الحسابات ثم المخازن) — لا ينطبق على الأوردر العادي لأنه لا يمس رصيد أمانة أصلاً
+    if(retQty>0&&o.orderType!=='regular'){
       const ret={
         id:uid('ret'),kind:'return',stage:'return_pending_rep',
         cby:o.cby,cbyn:o.cbyn,createdAt:Date.now(),updAt:Date.now(),
@@ -2705,16 +2747,22 @@ function doXLS(){
   const hd=[['التاريخ','النوع','رقم الأمر','العميل','الصنف','التشغيلة (Batch)','تاريخ الانتهاء','الكمية','الحالة','المندوب','رقم العربية','المعمل','مسؤول الخدمة/الدكتور','بواسطة','ملحوظة']];
   DB.orders.forEach(o=>{
     const doctorName = o.kind==='withdrawal'&&o.counterCode ? u2n((DB.counters.find(c=>c.code===o.counterCode)||{}).owner) : (o.cby?u2n(o.cby):'-');
+    const kindLabel = o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي (SMS)':'صرف من الأمانة'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':o.kind==='lab_transfer'?'تحويل بين معامل':o.kind==='consumption'?'استهلاك':o.kind==='counter_return'?'استرجاع كونتر':'تحويل';
     hd.push([
       new Date(o.createdAt||Date.now()).toLocaleDateString('ar-EG'),
-      o.kind==='addition'?'إضافة':o.kind==='withdrawal'?'صرف':o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':o.kind==='lab_transfer'?'تحويل بين معامل':o.kind==='consumption'?'استهلاك':o.kind==='counter_return'?'استرجاع كونتر':'تحويل',
+      kindLabel,
       o.inv||'-',o.cname||o.fcname||o.ccode||'-',o.iname||o.icode||'-',
       o.batch||'-',o.expiry||'-',o.qty||'-',
-      SLBL[o.stage]||o.stage,o.repName||'-',o.carNo||'-',o.labName||'-',doctorName||'-',
+      stageLabel(o),o.repName||'-',o.carNo||'-',o.labName||'-',doctorName||'-',
       o.cbyn||o.cby||'-',o.note||''
     ]);
   });
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(hd),'الحركات');
+  const regHd=[['التاريخ','رقم الأمر','العميل','الصنف','التشغيلة','الكمية','الحالة','بواسطة','ملحوظة']];
+  DB.orders.filter(o=>o.kind==='withdrawal'&&o.orderType==='regular').forEach(o=>{
+    regHd.push([new Date(o.createdAt||Date.now()).toLocaleDateString('ar-EG'),o.inv||'-',o.cname||o.ccode||'-',o.iname||o.icode||'-',o.batch||'-',o.qty||'-',stageLabel(o),o.cbyn||o.cby||'-',o.note||'']);
+  });
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(regHd),'أوردرات عادية SMS');
   const bd=[['كود العميل','اسم العميل','كود الصنف','اسم الصنف','التشغيلة (Batch)','تاريخ الانتهاء','مسؤول الخدمة/الدكتور','الرصيد (أمانة المخزن)']];
   Object.entries(DB.balances).forEach(([k,qty])=>{
     const parts=k.split('|');const cc=parts[0],ic=parts[1],batch=parts[2]||'';
