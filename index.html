@@ -556,7 +556,7 @@ td.name-cell{width:1%;white-space:nowrap;}
           <input type="password" id="adminPassInput" placeholder="••••••••">
         </div>
         <button class="btn btn-primary btn-block" onclick="doAdminLogin()">دخول كمسؤول</button>
-        <div class="login-hint">تلي: <b class="mono">01003459541</b> — محمد المعداوى.</div>
+        <div class="login-hint">تليفون: <b class="mono">01003459541</b> — محمد المعداوى.</div>
       </div>
 
       <div id="securityLoginForm" style="display:none;">
@@ -569,7 +569,7 @@ td.name-cell{width:1%;white-space:nowrap;}
           <input type="password" id="securityPassInput" placeholder="••••••••">
         </div>
         <button class="btn btn-primary btn-block" onclick="doSecurityLogin()">دخول كأمن</button>
-        <div class="login-hint">حساب تجريبي: <b class="mono">security1</b> / <b class="mono">sec123</b> — يمكن للأدمن إضافة حسابات أخرى من تبويب "الأمن". هذا الحساب يسجّل حضور وانصراف أي موظف فقط، بدون أي صلاحيات أخرى.</div>
+        <div class="login-hint">حساب تجريبي: <b class="mono">security1</b> / <b class="mono">أمن</b> — يمكن للأدمن إضافة حسابات أخرى من تبويب "الأمن". هذا الحساب يسجّل حضور وانصراف أي موظف فقط، بدون أي صلاحيات أخرى.</div>
       </div>
 
       <div id="supLoginForm" style="display:none;">
@@ -582,7 +582,7 @@ td.name-cell{width:1%;white-space:nowrap;}
           <input type="password" id="supPassInput" placeholder="••••••••">
         </div>
         <button class="btn btn-primary btn-block" onclick="doSupLogin()">دخول كمشرف وردية</button>
-        <div class="login-hint">حساب تجريبي: <b class="mono">supervisor1</b> / <b class="mono">super123</b> — يمكن للأدمن إضافة حسابات أخرى من تبويب "المشرفون".</div>
+        <div class="login-hint">حساب تجريبي: <b class="mono">supervisor1</b> / <b class="mono">مشرف</b> — يمكن للأدمن إضافة حسابات أخرى من تبويب "المشرفون".</div>
       </div>
 
       <div id="leadLoginForm" style="display:none;">
@@ -595,7 +595,7 @@ td.name-cell{width:1%;white-space:nowrap;}
           <input type="password" id="leadPassInput" placeholder="••••••••">
         </div>
         <button class="btn btn-primary btn-block" onclick="doLeadLogin()">دخول كمدير</button>
-        <div class="login-hint">حساب تجريبي: <b class="mono">lead1</b> / <b class="mono">lead123</b> — يمكن للأدمن إضافة حسابات أخرى من تبويب "المدير (Leads)".</div>
+        <div class="login-hint">حساب تجريبي: <b class="mono">lead1</b> / <b class="mono">مدير</b> — يمكن للأدمن إضافة حسابات أخرى من تبويب "المدير (Leads)".</div>
       </div>
 
       <div id="empLoginForm" style="display:none;">
@@ -2879,12 +2879,13 @@ async function saveAdminPass(){
 /* ==========================================================
    ADMIN / SUPERVISOR: ENTRIES
    ========================================================== */
-function renderEntriesTable(list, editable){
+function renderEntriesTable(list, editable, showLocation){
+  if(showLocation===undefined) showLocation = true;
   if(!list.length) return `<div class="empty-state"><div class="ico">🕒</div>لا توجد سجلات في هذا النطاق</div>`;
   return `<table>
     <thead><tr>
       <th>الموظف</th><th>التاريخ</th><th>المشروع/الموقع</th><th>دخول</th><th>خروج</th>
-      <th>ساعات عادية</th><th>أوفر تايم</th><th>إجمالي الأجر</th><th>الحالة</th><th>الموقع/الجهاز</th>${editable?'<th>—</th>':''}
+      <th>ساعات عادية</th><th>أوفر تايم</th><th>إجمالي الأجر</th><th>الحالة</th>${showLocation?'<th>الموقع/الجهاز</th>':''}${editable?'<th>—</th>':''}
     </tr></thead>
     <tbody>
       ${list.map(e=>{
@@ -2901,7 +2902,7 @@ function renderEntriesTable(list, editable){
           <td class="mono">${fmtHrs(h.ot)}</td>
           <td class="mono">${fmtMoney(p.totalPay)}</td>
           <td>${e.timeOut? '<span class="tag tag-closed">مغلق</span>' : '<span class="tag tag-open">جاري الآن</span>'}</td>
-          <td>${renderLocDeviceCell(e)}</td>
+          ${showLocation? `<td>${renderLocDeviceCell(e)}</td>` : ''}
           ${editable? `<td>
             <button class="btn-sm btn-teal" onclick="editEntry(${e.id})">تعديل</button>
             <button class="btn-sm btn-danger" onclick="deleteEntry(${e.id})">حذف</button>
@@ -2958,7 +2959,7 @@ function renderEntriesResults(){
   if(from) list = list.filter(e=>e.date>=from);
   if(to) list = list.filter(e=>e.date<=to);
   list.sort((a,b)=> (b.date+b.timeIn).localeCompare(a.date+a.timeIn));
-  document.getElementById('entriesResultsWrap').innerHTML = renderEntriesTable(list, SESSION.role==='admin');
+  document.getElementById('entriesResultsWrap').innerHTML = renderEntriesTable(list, SESSION.role==='admin', SESSION.role!=='supervisor');
 }
 function exportEntriesToExcel(){
   if(typeof XLSX==='undefined'){ alert('تعذّر تحميل مكتبة تصدير Excel — تأكد من اتصال الإنترنت وحاول مرة أخرى.'); return; }
@@ -2970,16 +2971,23 @@ function exportEntriesToExcel(){
   if(from) list = list.filter(e=>e.date>=from);
   if(to) list = list.filter(e=>e.date<=to);
   list.sort((a,b)=> (a.date+a.timeIn).localeCompare(b.date+b.timeIn));
-  const rows = [['الموظف','الوظيفة','التاريخ','المشروع / الموقع','دخول','خروج','ساعات عادية','ساعات أوفر تايم','إجمالي الأجر','الحالة','موقع الدخول','موقع الخروج','IP الدخول','IP الخروج','جهاز الدخول','جهاز الخروج']];
+  const showLocation = SESSION.role!=='supervisor';
+  const rows = [showLocation
+    ? ['الموظف','الوظيفة','التاريخ','المشروع / الموقع','دخول','خروج','ساعات عادية','ساعات أوفر تايم','إجمالي الأجر','الحالة','موقع الدخول','موقع الخروج','IP الدخول','IP الخروج','جهاز الدخول','جهاز الخروج']
+    : ['الموظف','الوظيفة','التاريخ','المشروع / الموقع','دخول','خروج','ساعات عادية','ساعات أوفر تايم','إجمالي الأجر','الحالة']];
   list.forEach(e=>{
     const emp = empById(e.employeeId);
     const h = computeEntryHours(e); const p = computeEntryPay(e);
-    rows.push([
-      emp?emp.name:'غير معروف', emp?emp.type:'', e.date, e.project||'', e.timeIn||'', e.timeOut||'', h.reg, h.ot, p.totalPay, e.timeOut?'مغلق':'جاري الآن',
-      e.locationIn? `${e.locationIn.lat}, ${e.locationIn.lng}` : '',
-      e.locationOut? `${e.locationOut.lat}, ${e.locationOut.lng}` : '',
-      e.ipIn||'', e.ipOut||'', e.deviceIn||'', e.deviceOut||''
-    ]);
+    const baseRow = [emp?emp.name:'غير معروف', emp?emp.type:'', e.date, e.project||'', e.timeIn||'', e.timeOut||'', h.reg, h.ot, p.totalPay, e.timeOut?'مغلق':'جاري الآن'];
+    if(showLocation){
+      rows.push([...baseRow,
+        e.locationIn? `${e.locationIn.lat}, ${e.locationIn.lng}` : '',
+        e.locationOut? `${e.locationOut.lat}, ${e.locationOut.lng}` : '',
+        e.ipIn||'', e.ipOut||'', e.deviceIn||'', e.deviceOut||''
+      ]);
+    }else{
+      rows.push(baseRow);
+    }
   });
   if(rows.length===1){ alert('لا توجد سجلات لتصديرها بهذه الفلاتر'); return; }
   const wb = XLSX.utils.book_new();
