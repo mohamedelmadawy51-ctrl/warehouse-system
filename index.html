@@ -556,7 +556,7 @@ td.name-cell{width:1%;white-space:nowrap;}
           <input type="password" id="adminPassInput" placeholder="••••••••">
         </div>
         <button class="btn btn-primary btn-block" onclick="doAdminLogin()">دخول كمسؤول</button>
-        <div class="login-hint">Tef: <b class="mono">01003459541</b> — Mohamed El-Madawy.</div>
+        <div class="login-hint">تلي: <b class="mono">01003459541</b> — محمد المعداوى.</div>
       </div>
 
       <div id="securityLoginForm" style="display:none;">
@@ -803,7 +803,7 @@ async function loadData(){
       if(!DATA.leaveRequests) DATA.leaveRequests = [];
       if(!DATA.settings.leaveTypes) DATA.settings.leaveTypes = JSON.parse(JSON.stringify(SEED_LEAVE_TYPES));
       if(!DATA.settings.locationGroups) DATA.settings.locationGroups = JSON.parse(JSON.stringify(SEED_SETTINGS.locationGroups));
-      DATA.supervisors.forEach(s=>{ if(s.leadId===undefined) s.leadId=null; });
+      DATA.supervisors.forEach(s=>{ if(s.leadId===undefined) s.leadId=null; if(s.kioskLocation===undefined) s.kioskLocation=''; });
       if(!DATA.dailyEvaluations) DATA.dailyEvaluations = [];
       if(!DATA.monthlyEvaluations) DATA.monthlyEvaluations = [];
       DATA.employees.forEach(e=>{ if(e.incentive===undefined) e.incentive = e.transport||0; if(e.photo===undefined) e.photo=null; if(e.monthlySalary===undefined) e.monthlySalary=0; if(e.pin===undefined) e.pin=''; if(e.supervisorId===undefined) e.supervisorId=null; if(e.baseLocation===undefined) e.baseLocation=''; if(e.teamLeadId===undefined) e.teamLeadId=null; if(e.empCode===undefined) e.empCode=''; });
@@ -1270,6 +1270,7 @@ function enterApp(){
       <div style="text-align:left;"><div class="name">${escapeHtml(sec.name)}</div><div class="role">أمن</div></div>
       <div class="avatar" style="background:var(--navy-3);">${escapeHtml((sec.name||'?').charAt(0))}</div>`;
     buildNav([
+      {id:'activity', ico:'🟢', label:'النشاط اليومي'},
       {id:'kiosk', ico:'🛂', label:'تسجيل حضور / انصراف'},
       {id:'scheduleGrid', ico:'🗓️', label:'جدول الشهر / الخطة'},
     ]);
@@ -1297,6 +1298,7 @@ function enterApp(){
       <div style="text-align:left;"><div class="name">${escapeHtml(sup.name)}</div><div class="role">مشرف وردية</div></div>
       <div class="avatar" style="background:var(--navy-3);">${escapeHtml((sup.name||'?').charAt(0))}</div>`;
     buildNav([
+      ...(sup.kioskLocation ? [{id:'kiosk', ico:'🛂', label:'تسجيل حضور / انصراف'}] : []),
       {id:'activity', ico:'🟢', label:'النشاط اليومي'},
       {id:'entries', ico:'🕒', label:'متابعة الحضور'},
       {id:'leaves_sup', ico:'🗓️', label:'طلبات الإجازات'},
@@ -2091,6 +2093,7 @@ function renderSupervisorsTab(){
       <td>${escapeHtml(s.name)}</td>
       <td class="mono">${escapeHtml(s.username)}</td>
       <td>${lead? escapeHtml(lead.name) : '<span class="tag tag-warn">بدون مدير</span>'}</td>
+      <td>${s.kioskLocation? `<span class="tag tag-open">🛂 ${escapeHtml(s.kioskLocation)}</span>` : '<span class="tag tag-warn">بدون تسجيل حضور</span>'}</td>
       <td>${s.active? '<span class="tag tag-open">نشط</span>' : '<span class="tag tag-closed">موقوف</span>'}</td>
       <td>
         <button class="btn-sm btn-teal" onclick="editSupervisor(${s.id})">تعديل</button>
@@ -2104,13 +2107,13 @@ function renderSupervisorsTab(){
         <button class="btn-sm btn-go" onclick="editSupervisor(null)">+ إضافة مشرف</button>
       </div>
       <div class="panel-body table-wrap">
-        ${DATA.supervisors.length? `<table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>المدير (Lead)</th><th>الحالة</th><th>—</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty-state"><div class="ico">🛡️</div>لا يوجد مشرفون بعد</div>`}
+        ${DATA.supervisors.length? `<table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>المدير (Lead)</th><th>تسجيل الحضور</th><th>الحالة</th><th>—</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty-state"><div class="ico">🛡️</div>لا يوجد مشرفون بعد</div>`}
       </div>
     </div>
   `;
 }
 function editSupervisor(id){
-  const s = id? supById(id) : {id:null,name:'',username:'',password:'',active:true,leadId:null};
+  const s = id? supById(id) : {id:null,name:'',username:'',password:'',active:true,leadId:null,kioskLocation:''};
   openModal(id?'تعديل مشرف':'إضافة مشرف وردية', `
     <div class="form-grid">
       <div class="f-field full"><label>الاسم</label><input id="s_name" value="${escapeHtml(s.name)}"></div>
@@ -2121,6 +2124,13 @@ function editSupervisor(id){
           <option value="">-- بدون مدير --</option>
           ${DATA.leads.filter(l=>l.active).map(l=>`<option value="${l.id}" ${s.leadId===l.id?'selected':''}>${escapeHtml(l.name)}</option>`).join('')}
         </select>
+      </div>
+      <div class="f-field full"><label>تسجيل حضور/انصراف (زي الأمن) — محصور بموقع معيّن</label>
+        <select id="s_kiosk_loc">
+          <option value="">-- غير مفعّل --</option>
+          ${DATA.settings.locationGroups.map(l=>`<option value="${l}" ${s.kioskLocation===l?'selected':''}>${escapeHtml(l)}</option>`).join('')}
+        </select>
+        <div style="font-size:11px;color:#9AA9BA;margin-top:4px;">لو فعّلت موقع هنا، هيظهر لهذا المشرف تبويب "تسجيل حضور / انصراف" زي الأمن بالظبط، لكن هيقدر يسجّل بس للموظفين اللي "الموقع الأساسي" بتاعهم هو نفس الموقع المختار.</div>
       </div>
       <div class="f-field full"><label>الحالة</label>
         <select id="s_active">
@@ -2140,12 +2150,13 @@ async function saveSupervisor(id){
   const username = document.getElementById('s_user').value.trim();
   const password = document.getElementById('s_pass').value;
   const leadId = document.getElementById('s_lead').value ? parseInt(document.getElementById('s_lead').value) : null;
+  const kioskLocation = document.getElementById('s_kiosk_loc').value;
   const active = document.getElementById('s_active').value==='1';
   if(!name || !username || !password){ alert('من فضلك أكمل كل الحقول'); return; }
   const dup = DATA.supervisors.find(x=>x.username===username && x.id!==id);
   if(dup){ alert('اسم المستخدم مستخدم بالفعل'); return; }
-  if(id){ Object.assign(supById(id), {name,username,password,leadId,active}); }
-  else{ DATA.supervisors.push({id: nextId(DATA.supervisors), name,username,password,leadId,active}); }
+  if(id){ Object.assign(supById(id), {name,username,password,leadId,kioskLocation,active}); }
+  else{ DATA.supervisors.push({id: nextId(DATA.supervisors), name,username,password,leadId,kioskLocation,active}); }
   await saveData(); closeModal(); renderSupervisorsTab();
 }
 async function deleteSupervisor(id){
@@ -2288,13 +2299,22 @@ async function deleteSecurity(id){
 /* ==========================================================
    SECURITY: KIOSK — clock any employee in/out, no other permissions
    ========================================================== */
+function kioskAllowedLocation(){
+  if(SESSION && SESSION.role==='supervisor'){
+    const sup = supById(SESSION.supervisorId);
+    return sup && sup.kioskLocation ? sup.kioskLocation : null;
+  }
+  return null;
+}
 function renderKioskTab(){
-  const activeEmps = DATA.employees.filter(e=>e.active).sort((a,b)=>a.name.localeCompare(b.name,'ar'));
+  const loc = kioskAllowedLocation();
+  const activeEmps = DATA.employees.filter(e=>e.active && (!loc || e.baseLocation===loc)).sort((a,b)=>a.name.localeCompare(b.name,'ar'));
   document.getElementById('content').innerHTML = `
     <div class="punch-wrap">
       <div class="punch-card">
         <div class="punch-clock-big mono" id="punchClockBig">00:00:00</div>
         <div class="punch-date" id="punchDateBig">—</div>
+        ${loc? `<div class="notice-banner">🛂 تسجيل الحضور هنا محصور على موظفي موقع "${escapeHtml(loc)}" فقط.</div>` : ''}
         <div class="punch-project">
           <label>التاريخ (لتسجيل حضور يوم سابق لو لزم)</label>
           <input type="date" id="kioskDate" value="${todayStr()}" max="${todayStr()}" onchange="renderKioskStatus()">
@@ -2302,7 +2322,7 @@ function renderKioskTab(){
         <div class="punch-project">
           <label>اختر الموظف</label>
           <select id="kioskEmp" onchange="renderKioskStatus()">
-            ${activeEmps.map(e=>`<option value="${e.id}">${escapeHtml(e.name)} — ${escapeHtml(e.type)}</option>`).join('')}
+            ${activeEmps.length? activeEmps.map(e=>`<option value="${e.id}">${escapeHtml(e.name)} — ${escapeHtml(e.type)}</option>`).join('') : `<option value="">-- لا يوجد موظفون على هذا الموقع --</option>`}
           </select>
         </div>
         <div id="kioskStatusWrap"></div>
@@ -2319,7 +2339,9 @@ function renderKioskTab(){
 }
 function renderKioskStatus(){
   const wrap = document.getElementById('kioskStatusWrap');
-  const empId = parseInt(document.getElementById('kioskEmp').value);
+  const empSel = document.getElementById('kioskEmp').value;
+  if(!empSel){ if(wrap) wrap.innerHTML = `<div class="empty-state" style="padding:20px;"><div class="ico">🚫</div>لا يوجد موظفون متاحون لك لتسجيل حضورهم</div>`; return; }
+  const empId = parseInt(empSel);
   const dateSel = document.getElementById('kioskDate').value || todayStr();
   const emp = empById(empId);
   if(!emp || !wrap) return;
@@ -2363,7 +2385,7 @@ function renderKioskStatus(){
     ${!open? `
     <div class="punch-project">
       <label>المشروع / الموقع</label>
-      <select id="kioskProject">${DATA.projects.map(p=>`<option>${escapeHtml(p)}</option>`).join('')}</select>
+      <select id="kioskProject">${(kioskAllowedLocation() ? DATA.projects.filter(p=>p.includes(kioskAllowedLocation())) : DATA.projects).map(p=>`<option>${escapeHtml(p)}</option>`).join('')}</select>
     </div>` : ''}
     <div style="font-size:10.5px;color:var(--text-dim);margin-top:10px;">⏱️ الوقت معبّى تلقائيًا بالوقت الحالي، وتقدر تعدّله يدويًا لو الموظف حضر/انصرف في وقت مختلف.</div>
   `;
@@ -2371,8 +2393,10 @@ function renderKioskStatus(){
 function renderKioskPresentList(){
   const wrap = document.getElementById('kioskPresentWrap');
   if(!wrap) return;
+  const loc = kioskAllowedLocation();
   const open = DATA.entries.filter(e=>!e.timeOut).sort((a,b)=> (b.date+b.timeIn).localeCompare(a.date+a.timeIn));
-  wrap.innerHTML = open.length? open.map(e=>{
+  const filtered = loc ? open.filter(e=>{ const emp=empById(e.employeeId); return emp && emp.baseLocation===loc; }) : open;
+  wrap.innerHTML = filtered.length? filtered.map(e=>{
     const emp = empById(e.employeeId);
     if(!emp) return '';
     return `<div class="mini-stat"><div class="k">${getAvatarHtml(emp.name,emp.photo,'avatar-sm')} ${escapeHtml(emp.name)}</div><div class="v mono">${e.timeIn}</div></div>`;
@@ -2387,14 +2411,16 @@ async function handleKioskPunch(){
   if(btn){ btn.disabled = true; btn.textContent = '... جارِ التسجيل'; }
   const [geo, ip] = await Promise.all([ getGeoLocation(), getPublicIp() ]);
   const device = getDeviceInfo();
-  const sec = secById(SESSION.securityId);
+  let checkerName = null;
+  if(SESSION.role==='security'){ const sec = secById(SESSION.securityId); checkerName = sec ? sec.name : null; }
+  else if(SESSION.role==='supervisor'){ const sup = supById(SESSION.supervisorId); checkerName = sup ? sup.name : null; }
   if(open){
     if(chosenTime <= open.timeIn){ alert('وقت الانصراف لازم يكون بعد وقت الحضور ('+open.timeIn+')'); if(btn){btn.disabled=false; btn.textContent='تسجيل انصراف';} return; }
     open.timeOut = chosenTime;
     open.locationOut = geo;
     open.ipOut = ip;
     open.deviceOut = device;
-    open.checkedOutBySecurity = sec ? sec.name : null;
+    open.checkedOutBySecurity = checkerName;
     await saveData();
     showToast(greetingFor(emp.name, 'out'));
   }else{
@@ -2403,7 +2429,7 @@ async function handleKioskPunch(){
       id: nextId(DATA.entries), employeeId: emp.id, date: todayStr(),
       timeIn: chosenTime, timeOut: null, project, notes:'',
       locationIn: geo, ipIn: ip, deviceIn: device,
-      checkedInBySecurity: sec ? sec.name : null
+      checkedInBySecurity: checkerName
     });
     await saveData();
     showToast(greetingFor(emp.name, 'in'));
