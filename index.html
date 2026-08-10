@@ -353,6 +353,8 @@ function startRealTimeSync(){
     if(val!==null){ DB.settings=val; }
   });
 }
+function repOptions(){const set=new Set();DB.users.filter(u=>u.role==='rep').forEach(u=>set.add((u.name||'').trim()));DB.orders.forEach(o=>{if(o.repName)set.add(o.repName.trim());});return[...set].filter(Boolean).sort((a,b)=>a.localeCompare(b,'ar'));}
+function carOptions(){const set=new Set();DB.orders.forEach(o=>{if(o.carNo)set.add(o.carNo.trim());});return[...set].filter(Boolean).sort((a,b)=>a.localeCompare(b,'ar'));}
 function sname(code){const s=DB.sectors.find(x=>x.code===code);return s?s.name:'';}
 function lname(code){const l=DB.labs.find(x=>x.code===code);return l?l.name:'';}
 function cnname(code){const c=DB.counters.find(x=>x.code===code);return c?(c.name?c.code+' — '+c.name:c.code):'';}
@@ -680,6 +682,47 @@ function fc(code){return DB.customers.find(c=>c.code===code);}
 function fi(code){return DB.items.find(i=>i.code===code);}
 function bk(c,i,b){return c+'|'+i+(b&&b.trim()?'|'+b.trim():'');}
 function bkNoB(c,i){return c+'|'+i;}
+function custOpts(sel){return DB.customers.map(c=>`<option value="${c.code}" ${c.code===sel?'selected':''}>${c.code} — ${c.name}</option>`).join('');}
+function itemOpts(sel){return DB.items.map(i=>`<option value="${i.code}" ${i.code===sel?'selected':''}>${i.code} — ${i.name}</option>`).join('');}
+function centralBatchList(cc,ic){
+  if(!cc||!ic)return[];
+  const prefix=bkNoB(cc,ic)+'|';
+  return Object.entries(DB.balances).filter(([k,v])=>k.startsWith(prefix)&&v>0).map(([k,v])=>({batch:k.split('|')[2],qty:v})).sort((a,b)=>(a.batch||'').localeCompare(b.batch||'','ar'));
+}
+function labBatchList(lab,ic){
+  if(!lab||!ic)return[];
+  const prefix=bkNoB(lab,ic)+'|';
+  return Object.entries(DB.labBalances).filter(([k,v])=>k.startsWith(prefix)&&v>0).map(([k,v])=>({batch:k.split('|')[2],qty:v})).sort((a,b)=>(a.batch||'').localeCompare(b.batch||'','ar'));
+}
+function additionBatchHistory(cc,ic){
+  if(!cc||!ic)return[];
+  const set=new Set();
+  DB.orders.filter(o=>o.kind==='addition'&&o.ccode===cc&&o.icode===ic&&o.batch).forEach(o=>set.add(o.batch.trim()));
+  Object.keys(DB.balances).forEach(k=>{const p=k.split('|');if(p[0]===cc&&p[1]===ic&&p[2])set.add(p[2]);});
+  return[...set].filter(Boolean).sort((a,b)=>a.localeCompare(b,'ar'));
+}
+// ربط قائمة منسدلة لكود العميل/الصنف باسمه (وبقطاعه لو صنف) عند تغيير الاختيار
+function lkSel(cid,nid,type,secDisplayId,secValId){
+  const ce=document.getElementById(cid);if(!ce)return;
+  const fire=()=>{
+    const v=ce.value,ne=document.getElementById(nid);
+    const found=type==='c'?fc(v):fi(v);
+    if(ne)ne.value=found?found.name:'';
+    if(type==='i'&&secDisplayId){
+      const sd=document.getElementById(secDisplayId),sv=document.getElementById(secValId);
+      if(found&&found.sector){
+        const sn=sname(found.sector);
+        if(sd)sd.innerHTML=`<span class="tag tt">📂 القطاع: ${sn||found.sector}</span>`;
+        if(sv)sv.value=found.sector;
+      } else {
+        if(sd)sd.innerHTML=found?'<span style="font-size:11px;color:var(--warn);font-weight:700;">⚠️ هذا الصنف بدون قطاع محدد — راجع الإدارة</span>':'';
+        if(sv)sv.value='';
+      }
+    }
+  };
+  ce.addEventListener('change',fire);
+  fire();
+}
 function gb(c,i,b){
   if(b&&b.trim()){
     return DB.balances[bk(c,i,b)]||0;
@@ -985,17 +1028,15 @@ function rNew(){const t=S.ntype;return`
 
 function rConsF(){return`
   <div class="row2">
-    <div class="field"><label>كود العميل</label><input name="cc" id="ccc" required></div>
+    <div class="field"><label>كود العميل</label><select name="cc" id="ccc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
     <div class="field"><label>الاسم</label><input name="cn" id="ccn" readonly></div>
   </div>
-  <div id="cclk" class="lkname"></div>
-  <div class="field"><label>المعمل</label><select name="labCode" id="cslab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
+  <div class="field"><label>المعمل</label><select name="labCode" id="cslab" required><option value="">اختر العميل أولاً...</option></select></div>
   <div class="row2">
-    <div class="field"><label>كود الصنف</label><input name="ic" id="cic" required></div>
+    <div class="field"><label>كود الصنف</label><select name="ic" id="cic" required><option value="">اختر الصنف...</option>${itemOpts()}</select></div>
     <div class="field"><label>اسم الصنف</label><input name="iname" id="cin" readonly></div>
   </div>
-  <div id="cilk" class="lkname"></div>
-  <div class="field"><label>التشغيلة / الباتش</label><input name="batch" id="cbatch" required></div>
+  <div class="field"><label>التشغيلة / الباتش</label><select name="batch" id="cbatch" required><option value="">اختر المعمل والصنف أولاً...</option></select></div>
   <div id="cbalbx" class="balbox">اكتب بيانات العميل والمعمل والصنف والباتش لعرض الرصيد المتاح</div>
   <div class="field"><label>الكمية المستهلكة</label><input name="qty" type="number" min="1" id="cqty" required></div>
   <div class="field"><label>ملحوظة</label><textarea name="note" rows="2"></textarea></div>`;}
@@ -1007,21 +1048,34 @@ function cbbl(){
     const ic=(document.getElementById('cic')||{}).value?.trim();
     const labSel=document.getElementById('cslab');
     const lab=labSel?labSel.value:'';
-    const bv=(document.getElementById('cbatch')||{}).value?.trim()||'';
+    const batchSel=document.getElementById('cbatch');
+    const bv=(batchSel||{}).value?.trim()||'';
     const qty=+(document.getElementById('cqty')||{}).value||0;
     if(labSel){
       const labs=labsForCustomer(cc);
       const cur=labSel.value;
-      if(!cc||labs.length===0){labSel.innerHTML=`<option value="">${cc?'لا يوجد معامل لهذا العميل':'اكتب كود العميل أولاً...'}</option>`;}
+      if(!cc||labs.length===0){labSel.innerHTML=`<option value="">${cc?'لا يوجد معامل لهذا العميل':'اختر العميل أولاً...'}</option>`;}
       else{labSel.innerHTML=`<option value="">اختر المعمل...</option>`+labs.map(l=>`<option value="${l.code}" ${l.code===cur?'selected':''}>${l.name}</option>`).join('');}
     }
-    if(!cc||!lab||!ic||!bv){box.textContent='اكتب بيانات العميل والمعمل والصنف والباتش لعرض الرصيد المتاح';box.className='balbox';return;}
-    const bal=glb(lab,ic,bv);
+    if(batchSel){
+      const curB=batchSel.value;
+      const labNow=labSel?labSel.value:'';
+      if(!labNow||!ic){batchSel.innerHTML=`<option value="">اختر المعمل والصنف أولاً...</option>`;}
+      else{
+        const batches=labBatchList(labNow,ic);
+        if(!batches.length){batchSel.innerHTML=`<option value="">لا توجد تشغيلات متاحة بالمعمل لهذا الصنف</option>`;}
+        else{batchSel.innerHTML=`<option value="">اختر التشغيلة...</option>`+batches.map(b=>`<option value="${b.batch}" ${b.batch===curB?'selected':''}>📦 ${b.batch} — رصيد: ${b.qty}</option>`).join('');}
+      }
+    }
+    const bv2=(batchSel||{}).value?.trim()||'';
+    if(!cc||!lab||!ic||!bv2){box.textContent='اكتب بيانات العميل والمعمل والصنف والباتش لعرض الرصيد المتاح';box.className='balbox';return;}
+    const bal=glb(lab,ic,bv2);
     box.innerHTML=`الرصيد المتاح بالمعمل: <b style="color:${bal>0?'var(--ok)':'var(--bad)'}">${bal}</b>`;
     box.className='balbox '+(bal<=0?'balbad':(qty>bal?'balbad':'balok'));
   };
-  ['ccc','cic','cbatch','cqty'].forEach(id=>{const e=document.getElementById(id);if(e)e.addEventListener('input',upd);});
+  ['ccc','cic','cqty'].forEach(id=>{const e=document.getElementById(id);if(e){e.addEventListener('input',upd);e.addEventListener('change',upd);}});
   const labSel=document.getElementById('cslab');if(labSel)labSel.addEventListener('change',upd);
+  const batchSel=document.getElementById('cbatch');if(batchSel)batchSel.addEventListener('change',upd);
   upd();
 }
 
@@ -1048,22 +1102,49 @@ function rAddF(){return`
   <div class="field"><label>رقم الأمر / SO</label><input name="inv" id="ainv" placeholder="SO26-00001" required></div>
   <div id="ainvchk" class="lkname"></div>
   <div class="row2">
-    <div class="field"><label>كود العميل</label><input name="cc" id="acc" required></div>
+    <div class="field"><label>كود العميل</label><select name="cc" id="acc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
     <div class="field"><label>اسم العميل</label><input name="cn" id="acn" readonly></div>
   </div>
-  <div id="aclk" class="lkname"></div>
   <div class="row2">
-    <div class="field"><label>كود الصنف</label><input name="ic" id="aic" required></div>
+    <div class="field"><label>كود الصنف</label><select name="ic" id="aic" required><option value="">اختر الصنف...</option>${itemOpts()}</select></div>
     <div class="field"><label>اسم الصنف</label><input name="iname" id="ain" readonly></div>
   </div>
-  <div id="ailk" class="lkname"></div>
   <div id="aisec" style="margin:-6px 0 10px;"></div><input type="hidden" name="sector" id="aisecval">
   <div class="row2">
-    <div class="field"><label>التشغيلة / الباتش</label><input name="batch" required></div>
+    <div class="field">
+      <label>التشغيلة / الباتش</label>
+      <select id="abatchSel" name="batchSel">
+        <option value="__new__" selected>➕ تشغيلة جديدة</option>
+      </select>
+      <input name="batchOther" id="abatchOther" placeholder="اكتب رقم التشغيلة" required style="margin-top:6px;">
+    </div>
     <div class="field"><label>تاريخ الانتهاء</label><input name="expiry" type="date" required></div>
   </div>
   <div class="field"><label>الكمية</label><input name="qty" type="number" min="1" required></div>
   <div class="field"><label>ملحوظة</label><textarea name="note" rows="2"></textarea></div>`;}
+
+function abbl(){
+  const sel=document.getElementById('abatchSel'),oth=document.getElementById('abatchOther');
+  if(!sel||!oth)return;
+  const refresh=()=>{
+    const cc=(document.getElementById('acc')||{}).value?.trim();
+    const ic=(document.getElementById('aic')||{}).value?.trim();
+    const cur=sel.value;
+    const hist=additionBatchHistory(cc,ic);
+    sel.innerHTML=`<option value="__new__">➕ تشغيلة جديدة</option>`+hist.map(b=>`<option value="${b}" ${b===cur?'selected':''}>📦 ${b} (تشغيلة سابقة لهذا الصنف)</option>`).join('');
+    if(!hist.includes(cur))sel.value='__new__';
+    toggle();
+  };
+  const toggle=()=>{
+    const isNew=sel.value==='__new__';
+    oth.style.display=isNew?'block':'none';
+    oth.required=isNew;
+    if(!isNew)oth.value='';
+  };
+  sel.addEventListener('change',toggle);
+  ['acc','aic'].forEach(id=>{const e=document.getElementById(id);if(e)e.addEventListener('change',refresh);});
+  refresh();
+}
 
 function rSubF(){
   const wt=S.wtype||'amanah';
@@ -1075,19 +1156,16 @@ function rSubF(){
   <input type="hidden" name="orderType" value="${wt}">
   ${wt==='regular'?`<div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;">ℹ️ الأوردر العادي بيمشي بنفس خطوات الموافقة، لكنه لا يخصم من رصيد أمانة العميل ولا يُسجَّل في أرصدة المعامل.</div>`:''}
   <div class="row2">
-    <div class="field"><label>كود العميل</label><input name="cc" id="scc" required></div>
+    <div class="field"><label>كود العميل</label><select name="cc" id="scc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
     <div class="field"><label>اسم العميل</label><input name="cn" id="scn" readonly></div>
   </div>
-  <div id="sclk" class="lkname"></div>
   <div class="row2">
-    <div class="field"><label>كود الصنف</label><input name="ic" id="sic" required></div>
+    <div class="field"><label>كود الصنف</label><select name="ic" id="sic" required><option value="">اختر الصنف...</option>${itemOpts()}</select></div>
     <div class="field"><label>اسم الصنف</label><input name="iname" id="sin" readonly></div>
   </div>
-  <div id="silk" class="lkname"></div>
   <div id="sisec" style="margin:-6px 0 10px;"></div><input type="hidden" name="sector" id="sisecval">
-  <div class="field"><label>الباتش${wt==='regular'?' (اختياري)':' المطلوب صرفه'}</label><input name="batch" id="sbatch" placeholder="اكتب رقم الباتش لعرض رصيده" ${wt==='amanah'?'required':''}></div>
-  ${wt==='amanah'?`<div id="balbx" class="balbox">أدخل كود العميل والصنف لعرض الرصيد المتاح حالياً</div>
-  <div id="batchlist"></div>`:''}
+  ${wt==='amanah'?`<div class="field"><label>الباتش المطلوب صرفه</label><select name="batch" id="sbatch" required><option value="">اختر العميل والصنف أولاً...</option></select></div>
+  <div id="balbx" class="balbox">أدخل كود العميل والصنف لعرض الرصيد المتاح حالياً</div>`:`<div class="field"><label>الباتش (اختياري)</label><input name="batch" id="sbatch" placeholder="اكتب رقم الباتش (اختياري)"></div>`}
   <div class="field"><label>الكمية المطلوبة</label><input name="qty" type="number" min="1" id="sqty" required></div>
   ${wt==='amanah'?`
   <div class="row2">
@@ -1108,43 +1186,24 @@ function updateLabOptions(cc){
   sel.innerHTML=`<option value="">اختر معمل العميل...</option>`+labs.map(l=>`<option value="${l.code}" ${l.code===cur?'selected':''}>${l.name}</option>`).join('');
 }
 
-function updateBatchList(cc, ic, listElId, inputElId){
-  listElId=listElId||'batchlist';inputElId=inputElId||'sbatch';
-  const el=document.getElementById(listElId);if(!el)return;
-  // عرض الباتشات المتاحة للعميل والصنف
-  const prefix=bkNoB(cc,ic)+'|';
-  const batches=Object.entries(DB.balances)
-    .filter(([k,v])=>k.startsWith(prefix)&&v>0)
-    .map(([k,v])=>({batch:k.split('|')[2],qty:v}));
-  if(!cc||!ic||batches.length===0){el.innerHTML='';return;}
-  el.innerHTML=`<div style="background:var(--blue-lg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;">
-    <div style="font-weight:800;color:var(--blue2);margin-bottom:6px;">الباتشات المتاحة:</div>
-    ${batches.map(b=>`<div style="display:flex;justify-content:space-between;padding:3px 0;cursor:pointer;" onclick="document.getElementById('${inputElId}').value='${b.batch}';document.getElementById('${inputElId}').dispatchEvent(new Event('input'));">
-      <span style="color:var(--warn);font-weight:700;">📦 ${b.batch}</span>
-      <span style="color:var(--ok);font-weight:800;">رصيد: ${b.qty}</span>
-    </div>`).join('')}
-  </div>`;
-}
 function rTr(){return`
   <div class="stitle">تحويل بين المعامل</div><div class="ssub">تحويل بضاعة و/أو كونتر بين معملين تابعين لنفس العميل (بعد ما تكون اتصرفت فعلاً للعميل)</div>
   <div class="content"><form id="trf">
     <div class="row2">
-      <div class="field"><label>كود العميل</label><input name="cc" id="tcc" required></div>
+      <div class="field"><label>كود العميل</label><select name="cc" id="tcc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
       <div class="field"><label>الاسم</label><input name="cn" id="tcn" readonly></div>
     </div>
-    <div id="tclk" class="lkname"></div>
     <div class="row2">
-      <div class="field"><label>من معمل</label><select name="flab" id="tflab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
-      <div class="field"><label>إلى معمل</label><select name="tlab" id="ttlab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
+      <div class="field"><label>من معمل</label><select name="flab" id="tflab" required><option value="">اختر العميل أولاً...</option></select></div>
+      <div class="field"><label>إلى معمل</label><select name="tlab" id="ttlab" required><option value="">اختر العميل أولاً...</option></select></div>
     </div>
 
     <div class="slabel">📦 نقل بضاعة (اختياري)</div>
     <div class="row2">
-      <div class="field"><label>كود الصنف</label><input name="ic" id="tic"></div>
+      <div class="field"><label>كود الصنف</label><select name="ic" id="tic"><option value="">اختر الصنف...</option>${itemOpts()}</select></div>
       <div class="field"><label>اسم الصنف</label><input name="iname" id="tin" readonly></div>
     </div>
-    <div id="tilk" class="lkname"></div>
-    <div class="field"><label>التشغيلة / الباتش</label><input name="batch" id="tbatch" placeholder="اكتب رقم الباتش لعرض رصيده بالمعمل المصدر"></div>
+    <div class="field"><label>التشغيلة / الباتش</label><select name="batch" id="tbatch"><option value="">اختر المعمل المصدر والصنف أولاً...</option></select></div>
     <div id="tbalbx" class="balbox">اكتب كود العميل والمعمل المصدر والصنف والباتش لعرض الرصيد المتاح داخل المعمل</div>
     <div class="field"><label>الكمية المطلوب تحويلها</label><input name="qty" type="number" min="1" id="tqty"></div>
 
@@ -1695,10 +1754,30 @@ function rOrd(){
       <button class="bs bok" data-a="appr" data-id="${o.id}">${o.stage==='return_pending_acc'?'↩️ موافقة — إرسال للمخازن للتأكيد':o.stage==='customer_return_pending_acc'?'✓ موافقة — إرسال للسيارات':'✓ موافقة وترحيل'}</button>
     </div>`;
   } else if(canCars){
+    const repOpts=repOptions(),carOpts=carOptions();
+    const curRep=(o.repName||'').trim(),curCar=(o.carNo||'').trim();
+    const repIsOther=curRep&&!repOpts.includes(curRep);
+    const carIsOther=curCar&&!carOpts.includes(curCar);
     acts += `<form id="carf" data-id="${o.id}">
       <div class="row2">
-        <div class="field"><label>اسم المندوب</label><input name="rn" value="${o.repName||''}" required></div>
-        <div class="field"><label>رقم العربية</label><input name="cn" value="${o.carNo||''}" required></div>
+        <div class="field">
+          <label>اسم المندوب</label>
+          <select name="rnSel" id="rnSel">
+            <option value="">اختر المندوب...</option>
+            ${repOpts.map(r=>`<option value="${r}" ${r===curRep?'selected':''}>${r}</option>`).join('')}
+            <option value="__other__" ${repIsOther?'selected':''}>➕ اسم آخر...</option>
+          </select>
+          <input name="rnOther" id="rnOther" placeholder="اكتب اسم المندوب" value="${repIsOther?curRep:''}" style="margin-top:6px;display:${repIsOther?'block':'none'};">
+        </div>
+        <div class="field">
+          <label>رقم العربية</label>
+          <select name="cnSel" id="cnSel">
+            <option value="">اختر رقم العربية...</option>
+            ${carOpts.map(c=>`<option value="${c}" ${c===curCar?'selected':''}>${c}</option>`).join('')}
+            <option value="__other__" ${carIsOther?'selected':''}>➕ رقم آخر...</option>
+          </select>
+          <input name="cnOther" id="cnOther" placeholder="اكتب رقم العربية" value="${carIsOther?curCar:''}" style="margin-top:6px;display:${carIsOther?'block':'none'};">
+        </div>
       </div>
       <button class="bs bgo" type="submit" style="width:100%;">🚗 ترحيل إلى المخازن</button>
     </form>`;
@@ -1781,7 +1860,7 @@ function rLabCounters(){
     return{labCode,counterCode,lab,counter,...st};
   }).filter(Boolean);
   if(q){
-    rows=rows.filter(r=>r.lab.name.toLowerCase().includes(q)||r.counterCode.toLowerCase().includes(q)||(fc(r.lab.custCode)?.name||'').toLowerCase().includes(q));
+    rows=rows.filter(r=>r.lab.name.toLowerCase().includes(q)||r.counterCode.toLowerCase().includes(q)||(fc(r.lab.custCode)?.name||'').toLowerCase().includes(q)||r.status.toLowerCase().includes(q)||(r.needsRefill?'نعم':'لا').includes(q));
   }
   rows.sort((a,b)=>(b.since||0)-(a.since||0));
   const stColor=s=>s==='ممتلئ'?'var(--ok)':s==='جيد'?'var(--blue2)':s==='يحتاج تزويد'?'var(--warn)':s==='خارج الخدمة'?'var(--muted)':'var(--bad)';
@@ -1789,7 +1868,10 @@ function rLabCounters(){
   <div class="stitle">📡 متابعة الكونترات داخل المعامل</div>
   <div class="ssub">${rows.length} كونتر موجود حالياً بالمعامل</div>
   <div class="content">
-    <div class="field"><input id="lcsi" placeholder="🔎 بحث باسم المعمل أو رقم الكونتر..." value="${q.replace(/"/g,'&quot;')}"></div>
+    <div class="field"><input id="lcsi" placeholder="🔎 بحث باسم المعمل أو رقم الكونتر أو الحالة أو يحتاج تزويد (نعم/لا)..." value="${q.replace(/"/g,'&quot;')}"></div>
+    <div class="brow" style="margin-bottom:8px;">
+      <button class="bs bgo" data-a="xlslabcnt" type="button" style="width:100%;">📥 تصدير تقرير Excel</button>
+    </div>
     ${S.user.role==='admin'?`
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue2);">
       <div style="font-weight:800;font-size:12px;margin-bottom:6px;">⚙️ إعدادات الحساب التلقائي</div>
@@ -1892,8 +1974,7 @@ function rAdm(){return`
     ${DB.items.map(i=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${i.code}${i.sector?' · '+sname(i.sector):''}</span><b>${i.name} ${i.unit?'('+i.unit+')':''}</b></div>`).join('')}
     <div class="slabel">إضافة معمل (معمل تابع لعميل)</div>
     <form id="alf">
-      <div class="row2"><div class="field"><label>كود العميل</label><input name="ccode" id="alcc" required></div><div class="field"><label>اسم العميل</label><input name="ccname" id="alcn" readonly></div></div>
-      <div id="allk" class="lkname"></div>
+      <div class="row2"><div class="field"><label>كود العميل</label><select name="ccode" id="alcc" required><option value="">اختر العميل...</option>${custOpts()}</select></div><div class="field"><label>اسم العميل</label><input name="ccname" id="alcn" readonly></div></div>
       <div class="row2"><div class="field"><label>كود المعمل</label><input name="code" required></div><div class="field"><label>اسم المعمل</label><input name="name" required></div></div>
       <button class="btn-primary" type="submit">إضافة المعمل</button>
     </form>
@@ -1937,48 +2018,23 @@ function bind(){
     });
   };
   f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);
+  const rnSelEl=document.getElementById('rnSel');
+  if(rnSelEl)rnSelEl.addEventListener('change',()=>{const ot=document.getElementById('rnOther');if(ot)ot.style.display=rnSelEl.value==='__other__'?'block':'none';});
+  const cnSelEl=document.getElementById('cnSel');
+  if(cnSelEl)cnSelEl.addEventListener('change',()=>{const ot=document.getElementById('cnOther');if(ot)ot.style.display=cnSelEl.value==='__other__'?'block':'none';});
   const n2cntEl=document.getElementById('n2cnt');if(n2cntEl)n2cntEl.addEventListener('change',()=>updateN2LabOptions(n2cntEl.value));
   f('crf',onCounterReturn);
   const crlabEl=document.getElementById('crlab');if(crlabEl)crlabEl.addEventListener('change',()=>updateCRCounterOptions(crlabEl.value));
-  lk('ccc','ccn','cclk','c');lk('cic','cin','cilk','i');
+  lkSel('ccc','ccn','c');lkSel('cic','cin','i');
   cbbl();
-  lk('acc','acn','aclk','c');lk('aic','ain','ailk','i','aisec','aisecval');
-  lk('alcc','alcn','allk','c');
-  lk('scc','scn','sclk','c');lk('sic','sin','silk','i','sisec','sisecval');
-  // تحديث قائمة الباتشات عند تغيير العميل أو الصنف
-  ['scc','sic'].forEach(id=>{
-    const el=document.getElementById(id);
-    if(el) el.addEventListener('input',()=>{
-      const cc=(document.getElementById('scc')||{}).value?.trim();
-      const ic=(document.getElementById('sic')||{}).value?.trim();
-      updateBatchList(cc,ic);
-    });
-  });
-  lk('tcc','tcn','tclk','c');lk('tic','tin','tilk','i');
+  lkSel('acc','acn','c');lkSel('aic','ain','i','aisec','aisecval');
+  abbl();
+  lkSel('alcc','alcn','c');
+  lkSel('scc','scn','c');lkSel('sic','sin','i','sisec','sisecval');
+  lkSel('tcc','tcn','c');lkSel('tic','tin','i');
   bbl();tbbl();bsi();bhsi();bclsi();blcsi();checkInvDup();
   const af=document.getElementById('atf');if(af)af.addEventListener('change',onAtt);
   const upf=document.getElementById('upf');if(upf)upf.addEventListener('change',onUPhoto);
-}
-
-function lk(cid,nid,lid,type,secDisplayId,secValId){
-  const ce=document.getElementById(cid);if(!ce)return;
-  ce.addEventListener('input',()=>{
-    const v=ce.value.trim(),ne=document.getElementById(nid),le=document.getElementById(lid);
-    const found=type==='c'?fc(v):fi(v);
-    if(found){ne.value=found.name;le.textContent='✓ '+found.name;le.classList.remove('miss');}
-    else{ne.value='';le.textContent=v?'✗ غير موجود':'';le.classList.toggle('miss',!!v);}
-    if(type==='i'&&secDisplayId){
-      const sd=document.getElementById(secDisplayId),sv=document.getElementById(secValId);
-      if(found&&found.sector){
-        const sn=sname(found.sector);
-        if(sd)sd.innerHTML=`<span class="tag tt">📂 القطاع: ${sn||found.sector}</span>`;
-        if(sv)sv.value=found.sector;
-      } else {
-        if(sd)sd.innerHTML=found?'<span style="font-size:11px;color:var(--warn);font-weight:700;">⚠️ هذا الصنف بدون قطاع محدد — راجع الإدارة</span>':'';
-        if(sv)sv.value='';
-      }
-    }
-  });
 }
 
 function bbl(){
@@ -1988,6 +2044,15 @@ function bbl(){
     const cc=(document.getElementById('scc')||{}).value?.trim();
     const ic=(document.getElementById('sic')||{}).value?.trim();
     const batchEl=document.getElementById('sbatch');
+    if(batchEl&&batchEl.tagName==='SELECT'){
+      const cur=batchEl.value;
+      if(!cc||!ic){batchEl.innerHTML=`<option value="">اختر العميل والصنف أولاً...</option>`;}
+      else{
+        const batches=centralBatchList(cc,ic);
+        if(!batches.length){batchEl.innerHTML=`<option value="">لا يوجد رصيد/تشغيلات متاحة لهذا الصنف</option>`;}
+        else{batchEl.innerHTML=`<option value="">اختر التشغيلة...</option>`+batches.map(b=>`<option value="${b.batch}" ${b.batch===cur?'selected':''}>📦 ${b.batch} — رصيد: ${b.qty}</option>`).join('');}
+      }
+    }
     const bv=(batchEl||{}).value?.trim()||'';
     const qty=+(document.getElementById('sqty')||{}).value||0;
     updateLabOptions(cc);
@@ -2011,7 +2076,8 @@ function bbl(){
     }
     box.innerHTML=msg;
   };
-  ['scc','sic','sqty','sbatch'].forEach(id=>{const e=document.getElementById(id);if(e)e.addEventListener('input',upd);});
+  ['scc','sic','sqty'].forEach(id=>{const e=document.getElementById(id);if(e){e.addEventListener('input',upd);e.addEventListener('change',upd);}});
+  const batchEl0=document.getElementById('sbatch');if(batchEl0)batchEl0.addEventListener('change',upd);
   upd();
 }
 
@@ -2022,7 +2088,17 @@ function tbbl(){
     const cc=(document.getElementById('tcc')||{}).value?.trim();
     const ic=(document.getElementById('tic')||{}).value?.trim();
     const flab=(document.getElementById('tflab')||{}).value?.trim();
-    const bv=(document.getElementById('tbatch')||{}).value?.trim()||'';
+    const batchEl=document.getElementById('tbatch');
+    if(batchEl){
+      const cur=batchEl.value;
+      if(!flab||!ic){batchEl.innerHTML=`<option value="">اختر المعمل المصدر والصنف أولاً...</option>`;}
+      else{
+        const batches=labBatchList(flab,ic);
+        if(!batches.length){batchEl.innerHTML=`<option value="">لا توجد تشغيلات متاحة بالمعمل المصدر لهذا الصنف</option>`;}
+        else{batchEl.innerHTML=`<option value="">اختر التشغيلة...</option>`+batches.map(b=>`<option value="${b.batch}" ${b.batch===cur?'selected':''}>📦 ${b.batch} — رصيد: ${b.qty}</option>`).join('');}
+      }
+    }
+    const bv=(batchEl||{}).value?.trim()||'';
     const qty=+(document.getElementById('tqty')||{}).value||0;
     updateLabPickers(cc);
     if(!cc||!flab||!ic||!bv){box.textContent='اكتب كود العميل والمعمل المصدر والصنف والباتش لعرض الرصيد المتاح داخل المعمل';box.className='balbox';}
@@ -2142,6 +2218,7 @@ function onA(e){
   else if(a==='rdlv'){doRDlv(id);}
   else if(a==='tog'){doTog(el.dataset.un);}
   else if(a==='xls'){doXLS();}
+  else if(a==='xlslabcnt'){doXLSLabCounters();}
   else if(a==='pdf'){window.print();}
   else if(a==='complain'){doComplain();}
 }
@@ -2177,10 +2254,14 @@ async function onNew(e){
   const itFound=fi(ic);
   if(itFound&&!itFound.sector){toast('⚠️ هذا الصنف غير مرتبط بقطاع — الرجاء إبلاغ الإدارة لتحديد قطاعه أولاً');return;}
   if(itFound&&!sector){toast('⛔ الرجاء اختيار/تأكيد كود الصنف حتى يظهر القطاع تلقائياً');return;}
+  let batchVal=f.get('batch');
   if(kind==='addition'){
     const inv=(f.get('inv')||'').trim();
     const dup=DB.orders.some(o=>o.kind==='addition'&&o.stage!=='rejected'&&(o.inv||'').trim().toLowerCase()===inv.toLowerCase());
     if(dup){toast(`⛔ رقم الأمر "${inv}" مُستخدم من قبل — لا يمكن تكراره`);return;}
+    const bSel=f.get('batchSel');
+    batchVal=bSel==='__new__'?(f.get('batchOther')||'').trim():bSel;
+    if(!batchVal){toast('⛔ الرجاء إدخال أو اختيار رقم التشغيلة');return;}
   }
   const orderType=kind==='withdrawal'?(f.get('orderType')||'amanah'):'';
   if(kind==='withdrawal'&&orderType==='amanah'){
@@ -2212,7 +2293,7 @@ async function onNew(e){
   }
   const o={id:uid('o'),kind,stage:'pending_accounts',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
     inv:f.get('inv')||'',ccode:cc,cname:f.get('cn'),icode:ic,iname:f.get('iname'),
-    batch:f.get('batch'),expiry:f.get('expiry'),qty,note:f.get('note')||'',
+    batch:batchVal,expiry:f.get('expiry'),qty,note:f.get('note')||'',
     orderType,
     labCode:orderType==='amanah'?labCode:'',labName:orderType==='amanah'?lname(labCode):'',
     counterCode:orderType==='amanah'?counterCode:'',counterName:(orderType==='amanah'&&counterCode)?cnname(counterCode):'',
@@ -2283,7 +2364,13 @@ async function onTrf(e){
 async function onCars(e){
   e.preventDefault();const f=new FormData(e.target),id=e.target.dataset.id;
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
-  o.repName=f.get('rn');o.carNo=f.get('cn');
+  let rn=(f.get('rnSel')||'').trim();
+  if(rn==='__other__')rn=(f.get('rnOther')||'').trim();
+  let cn=(f.get('cnSel')||'').trim();
+  if(cn==='__other__')cn=(f.get('cnOther')||'').trim();
+  if(!rn){toast('⛔ الرجاء اختيار أو كتابة اسم المندوب');return;}
+  if(!cn){toast('⛔ الرجاء اختيار أو كتابة رقم العربية');return;}
+  o.repName=rn;o.carNo=cn;
   o.stage=(o.kind==='customer_return')?'customer_return_pending_wh':'pending_warehouse';
   o.updAt=Date.now();
   await svo();anim('جارِ الإرسال إلى المخازن',()=>{S.tab='home';S.oid=null;});
@@ -2342,15 +2429,17 @@ async function doRej(id){
 
 async function doWH(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
-  // تأكيد نهائي لاستلام مرتجع من تسليم جزئي → إضافة الرصيد (الكمية كانت لم تصل للعميل أصلاً)
+  // تأكيد نهائي لاستلام مرتجع من تسليم جزئي → إضافة الرصيد (الكمية كانت لم تصل للعميل أصلاً) — لا يُضاف رصيد أمانة للأوردر العادي (SMS) لأنه أصلاً لا يمس رصيد الأمانة
   if(o.stage==='return_pending_wh'){
     if(o.balAdded){toast('⚠️ تمت إضافة هذا الرصيد مسبقاً');return;}
-    const k=bk(o.ccode,o.icode,o.batch);
-    DB.balances[k]=(DB.balances[k]||0)+(+o.qty);
+    if(o.orderType!=='regular'){
+      const k=bk(o.ccode,o.icode,o.batch);
+      DB.balances[k]=(DB.balances[k]||0)+(+o.qty);
+    }
     o.balAdded=true;
     o.stage='returned';
     o.updAt=Date.now();await svo();
-    anim('✅ تم تأكيد الاستلام بالمخزن وإضافة الرصيد للعميل',()=>{S.tab='home';S.oid=null;});
+    anim(o.orderType==='regular'?'✅ تم تأكيد استلام مرتجع الأوردر العادي بالمخزن':'✅ تم تأكيد الاستلام بالمخزن وإضافة الرصيد للعميل',()=>{S.tab='home';S.oid=null;});
     return;
   }
   // تأكيد نهائي لسحوبات (سحب بضاعة من رصيد العميل) → خصم الرصيد من المصدر، ولو كانت من معمل فالبضاعة بترجع فعلياً لأمانة المخزن
@@ -2450,14 +2539,14 @@ async function doRDlv(id){
         logCounterMove(o.counterCode,'خروج مع البضاعة',cq,'المخزن',o.labName||o.labCode,0,'أوردر صرف: '+(o.inv||o.id));
       }
     }
-    // لو تسليم جزئي → أنشئ أوردر إرجاع تلقائياً (يبدأ بتأكيد المندوب ثم الحسابات ثم المخازن) — لا ينطبق على الأوردر العادي لأنه لا يمس رصيد أمانة أصلاً
-    if(retQty>0&&o.orderType!=='regular'){
+    // لو تسليم جزئي → أنشئ أوردر إرجاع تلقائياً (يبدأ بتأكيد المندوب ثم الحسابات ثم المخازن) — نفس الطريقة تنطبق على الأوردر العادي (SMS) أيضاً، مع عدم لمس رصيد الأمانة له عند التأكيد النهائي
+    if(retQty>0){
       const ret={
         id:uid('ret'),kind:'return',stage:'return_pending_rep',
         cby:o.cby,cbyn:o.cbyn,createdAt:Date.now(),updAt:Date.now(),
         ccode:o.ccode,cname:o.cname,icode:o.icode,iname:o.iname,
         batch:o.batch,qty:retQty,sector:o.sector||'',sectorName:o.sectorName||sname(o.sector),
-        repName:o.repName,carNo:o.carNo,
+        repName:o.repName,carNo:o.carNo,orderType:o.orderType,
         originalId:id,note:'مرتجع تلقائي — الكمية المُسلَّمة: '+dlvQty+' من '+o.qty
       };
       DB.orders.push(ret);
@@ -2741,6 +2830,35 @@ async function doCancel(id){
   await svo();toast('✅ تم إلغاء العملية وحذفها من السجلات');S.tab='home';S.oid=null;render();
 }
 
+function doXLSLabCounters(){
+  if(typeof XLSX==='undefined'){toast('جارِ تحميل مكتبة Excel...');return;}
+  const q=(S.labCntSrch||'').trim().toLowerCase();
+  let rows=Object.keys(DB.counterLabMeta).map(key=>{
+    const[labCode,counterCode]=key.split('|');
+    const lab=DB.labs.find(l=>l.code===labCode);
+    const counter=DB.counters.find(c=>c.code===counterCode);
+    if(!lab||!counter)return null;
+    const st=labCounterStatus(labCode,counterCode);
+    return{labCode,counterCode,lab,counter,...st};
+  }).filter(Boolean);
+  if(q){
+    rows=rows.filter(r=>r.lab.name.toLowerCase().includes(q)||r.counterCode.toLowerCase().includes(q)||(fc(r.lab.custCode)?.name||'').toLowerCase().includes(q)||r.status.toLowerCase().includes(q)||(r.needsRefill?'نعم':'لا').includes(q));
+  }
+  rows.sort((a,b)=>(b.since||0)-(a.since||0));
+  if(!rows.length){toast('⚠️ لا توجد بيانات لتصديرها');return;}
+  const hd=[['الكونتر','المعمل','العميل','تاريخ التسليم','الأيام','الفقد المتوقع %','المتبقي (لتر)','يحتاج تزويد','الحالة']];
+  rows.forEach(r=>{
+    hd.push([
+      r.counterCode,r.lab.name,fc(r.lab.custCode)?.name||'-',
+      r.since?new Date(r.since).toLocaleDateString('ar-EG'):'-',
+      r.days,r.lossPct.toFixed(0)+'%',r.remaining.toFixed(1),
+      r.needsRefill?'نعم':'لا',r.status
+    ]);
+  });
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(hd),'متابعة الكونترات');
+  XLSX.writeFile(wb,'IFT_LabCounters_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
 function doXLS(){
   if(typeof XLSX==='undefined'){toast('جارِ تحميل مكتبة Excel...');return;}
   const wb=XLSX.utils.book_new();
