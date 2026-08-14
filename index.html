@@ -254,13 +254,14 @@ const WATERMARK='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASwAAAEsCAYAAAB5f
    اتبع التعليمات في صفحة الإعداد داخل البرنامج
    ============================================================ */
 const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyBFs0uptMcsZZQ7PPqvpn1Micr8yPfwj-A",
-  authDomain: "customer-consignment-d7448.firebaseapp.com",
-  databaseURL: "https://customer-consignment-d7448-default-rtdb.firebaseio.com",
-  projectId: "customer-consignment-d7448",
-  storageBucket: "customer-consignment-d7448.firebasestorage.app",
-  messagingSenderId: "632208506852",
-  appId: "1:632208506852:web:551743e38619bd6cf7d1f1"
+  apiKey: "AIzaSyAoJKYCGzV-c8McW6IbYUInhvad4V9RQ1s",
+  authDomain: "customer-consignment.firebaseapp.com",
+  databaseURL: "https://customer-consignment-default-rtdb.firebaseio.com",
+  projectId: "customer-consignment",
+  storageBucket: "customer-consignment.firebasestorage.app",
+  messagingSenderId: "179880964487",
+  appId: "1:179880964487:web:5dc612a13fcb2dd6782322",
+  measurementId: "G-3L4KQ2NT3X"
 };
 
 const IS_CONFIGURED = !FIREBASE_CONFIG.apiKey.includes('REPLACE');
@@ -304,7 +305,9 @@ function startRealTimeSync(){
   FDB.ref(ROOT+'ift_orders').on('value', snap=>{
     const val=snap.val();
     if(val!==null && S.screen==='app'){
+      const prevOrders=DB.orders;
       DB.orders=val;
+      checkNewTasksNotify(prevOrders,val);
       if(S.tab==='home'||S.tab==='rep'||S.tab==='bal') render();
     }
   });
@@ -766,7 +769,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false};
 let pendAtt=null;
 let pendUPhoto=null;
 let _actionLock=false;
@@ -905,13 +908,101 @@ function rShell(){
   <div class="topbar">
     <div class="brand"><img class="tlogo" src="${LOGO}" alt="IFT">${u.photo?`<img src="${u.photo}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1.5px solid rgba(255,255,255,.4);">`:''}<div><div class="tname">${u.name}</div><div class="trole">${RLBL[u.role]}</div></div></div>
     <div id="syncdot" style="width:8px;height:8px;border-radius:50%;background:#54A437;margin-left:8px;" title="متصل"></div>
+    <button class="theme-toggle" data-a="notif" id="notifBell" style="position:relative;" title="الإشعارات">🔔<span id="notifBadge" style="display:none;position:absolute;top:2px;right:2px;background:var(--bad);color:#fff;border-radius:999px;min-width:16px;height:16px;line-height:16px;font-size:10px;font-weight:800;text-align:center;padding:0 3px;">0</span></button>
     <button class="theme-toggle" data-a="complain" title="إرسال شكوى">📩</button>
     <button class="theme-toggle" data-a="theme" id="themeBtn">🌙</button>
     <button class="logout" data-a="logout">خروج</button>
   </div>
+  ${S.notifOpen?rNotifPanel():''}
   ${body}
   <img class="bottom-logo" src="${USERLOGO}" alt="logo">
   <div class="tabbar">${getTabs().map(t=>`<button data-a="tab" data-tab="${t.k}" class="${(S.tab===t.k||(S.tab==='order'&&t.k==='home')||(S.tab==='cntlog'&&t.k==='adm')||(S.tab==='labcnt'&&t.k==='rep'))?'active':''}"><span class="ic">${t.ic}</span>${t.t}</button>`).join('')}</div>`;}
+
+// أوردرات/مهام بانتظار إجراء المستخدم الحالي تحديداً (تُستخدم لعداد الجرس ولوحة الإشعارات ولاكتشاف المهام الجديدة)
+function myPendingTasks(u,list){
+  list=list||DB.orders;
+  if(!u||!list)return[];
+  switch(u.role){
+    case 'accounts':return list.filter(o=>['pending_accounts','return_pending_acc','customer_return_pending_acc'].includes(o.stage));
+    case 'cars':return list.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars');
+    case 'warehouse':return list.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage));
+    case 'rep':return list.filter(o=>['pending_rep','with_rep','return_pending_rep'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username));
+    case 'admin':return list.filter(o=>['pending_accounts','pending_cars','pending_warehouse','pending_rep','with_rep','return_pending_rep','return_pending_acc','return_pending_wh','customer_return_pending_acc','customer_return_pending_cars','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage));
+    case 'data_entry':return list.filter(o=>o.cby===u.username&&o.stage==='rejected');
+    default:return[];
+  }
+}
+function updateBellBadge(){
+  const b=document.getElementById('notifBadge');if(!b)return;
+  const n=myPendingTasks(S.user).length;
+  if(n>0){b.textContent=n>99?'99+':String(n);b.style.display='block';}
+  else{b.style.display='none';}
+}
+function rNotifPanel(){
+  const u=S.user;
+  const tasks=myPendingTasks(u).sort((a,b)=>(b.updAt||b.createdAt||0)-(a.updAt||a.createdAt||0)).slice(0,30);
+  let permMsg='';
+  if(window.Notification){
+    if(Notification.permission==='granted')permMsg='<span style="color:var(--ok);font-weight:700;">✓ إشعارات المتصفح مفعّلة</span>';
+    else if(Notification.permission==='denied')permMsg='<span style="color:var(--bad);font-weight:700;">⛔ إشعارات المتصفح محظورة — فعّلها من إعدادات المتصفح</span>';
+    else permMsg='<span style="color:var(--warn);font-weight:700;">🔔 اضغط هنا لتفعيل إشعارات المتصفح</span>';
+  }
+  return`<div id="notifPanel" style="position:fixed;top:64px;left:12px;right:12px;max-width:420px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.28);z-index:999;max-height:70vh;overflow:auto;">
+    <div style="padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;">
+      <b>🔔 مهامك بانتظارك (${tasks.length})</b>
+      <button data-a="notifclose" style="background:none;border:none;font-size:16px;cursor:pointer;color:var(--muted);">✕</button>
+    </div>
+    ${permMsg?`<div style="padding:8px 14px;font-size:11px;cursor:${(window.Notification&&Notification.permission==='default')?'pointer':'default'};" ${(window.Notification&&Notification.permission==='default')?'data-a="notifperm"':''}>${permMsg}</div>`:''}
+    ${tasks.length===0?'<div style="padding:20px;text-align:center;color:var(--muted);">لا توجد مهام بانتظارك حالياً 🎉</div>':tasks.map(o=>`
+      <div data-a="notifitem" data-id="${o.id}" style="padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;">
+        <div style="font-weight:800;font-size:13px;">${otitle(o)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;">${o.cname||''}${o.inv?' · SO: '+o.inv:''}</div>
+        <div style="font-size:11px;color:var(--warn);margin-top:3px;font-weight:700;">${stageLabel(o)}</div>
+      </div>`).join('')}
+  </div>`;}
+
+// تشغيل نغمة تنبيه بسيطة بدون الحاجة لملف صوتي خارجي
+function playNotifSound(){
+  try{
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const beep=(freq,delay)=>setTimeout(()=>{
+      try{
+        const o=ctx.createOscillator(),g=ctx.createGain();
+        o.type='sine';o.frequency.value=freq;o.connect(g);g.connect(ctx.destination);
+        g.gain.setValueAtTime(.001,ctx.currentTime);g.gain.exponentialRampToValueAtTime(.18,ctx.currentTime+.02);g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.22);
+        o.start();o.stop(ctx.currentTime+.24);
+      }catch(_){}
+    },delay);
+    beep(880,0);beep(1174,160);
+  }catch(_){}
+}
+// إظهار إشعار حقيقي من المتصفح (يعمل طول ما المتصفح/التبويب شغال، حتى لو في الخلفية أو مصغّر)
+function fireNotif(title,body,oid){
+  if(!window.Notification||Notification.permission!=='granted')return;
+  try{
+    const n=new Notification(title,{body,icon:LOGO,tag:oid||('ift-'+Date.now()),renotify:!!oid});
+    n.onclick=()=>{try{window.focus();}catch(_){}
+      if(oid){S.notifOpen=false;S.tab='order';S.oid=oid;render();}
+      n.close();
+    };
+  }catch(_){}
+}
+// مقارنة قائمة المهام قبل وبعد أي تحديث لحظي من فايربيز، وإطلاق إشعار لو ظهرت مهمة جديدة تخص المستخدم الحالي
+function checkNewTasksNotify(prevList,newList){
+  const u=S.user;if(!u)return;
+  const prevIds=new Set(myPendingTasks(u,prevList||[]).map(o=>o.id));
+  const newTasks=myPendingTasks(u,newList||[]).filter(o=>!prevIds.has(o.id));
+  if(newTasks.length){
+    if(newTasks.length===1){
+      const o=newTasks[0];
+      fireNotif('🔔 مهمة جديدة — '+otitle(o), (o.cname?o.cname+' · ':'')+stageLabel(o), o.id);
+    }else{
+      fireNotif('🔔 لديك '+newTasks.length+' مهام جديدة',RLBL[u.role]+' — بانتظار إجرائك',null);
+    }
+    playNotifSound();
+  }
+  updateBellBadge();
+}
 
 function forRole(u){
   switch(u.role){
@@ -2180,7 +2271,7 @@ async function onUPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -2221,6 +2312,22 @@ function onA(e){
   else if(a==='xlslabcnt'){doXLSLabCounters();}
   else if(a==='pdf'){window.print();}
   else if(a==='complain'){doComplain();}
+  else if(a==='notif'){onNotifBell();}
+  else if(a==='notifperm'){requestNotifPermission();}
+  else if(a==='notifclose'){S.notifOpen=false;render();}
+  else if(a==='notifitem'){S.notifOpen=false;S.tab='order';S.oid=id;render();}
+}
+
+async function requestNotifPermission(){
+  if(!window.Notification||Notification.permission!=='default')return;
+  try{await Notification.requestPermission();}catch(_){}
+  render();
+}
+async function onNotifBell(){
+  if(window.Notification&&Notification.permission==='default'){
+    try{await Notification.requestPermission();}catch(_){}
+  }
+  S.notifOpen=!S.notifOpen;render();
 }
 
 function doComplain(){
@@ -2245,6 +2352,10 @@ async function onSI(e){
   if(!u){S.err='اسم المستخدم أو كلمة المرور غير صحيحة';render();return;}
   if(!u.active){S.err='هذا الحساب موقوف — راجع المدير';render();return;}
   S.user=u;S.err='';S.screen='app';S.tab='home';render();
+  if(window.Notification&&Notification.permission==='default'){
+    try{await Notification.requestPermission();}catch(_){}
+  }
+  updateBellBadge();
 }
 
 async function onNew(e){
