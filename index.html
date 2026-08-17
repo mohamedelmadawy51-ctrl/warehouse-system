@@ -409,7 +409,7 @@ async function resolveAreaNames(coordsList){
 }
 function uid(p){return p+'-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);}
 
-let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{}};
+let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[]};
 
 /* ============================================================
    نظام الخلفيات الديناميكية — IFT Veterinary
@@ -645,6 +645,7 @@ async function loadDB(){
     ['nitrogenBalances','ift_nitrogenBalances',{}],
     ['counterLabMeta','ift_counterLabMeta',{}],
     ['settings','ift_settings',{n2DailyLossPct:3,n2MinThreshold:10}],
+    ['cars','ift_cars',[]],
   ];
   // نجيب كل المفاتيح مع بعض بالتوازي بدل واحد ورا التاني — بيقلل زمن الدخول بشكل كبير
   const results=await Promise.all(keys.map(([,k,fb])=>dbGet(k,fb)));
@@ -663,6 +664,7 @@ async function svcl(){await dbSet('ift_counterLog',DB.counterLog);}
 async function svn2(){await dbSet('ift_nitrogenBalances',DB.nitrogenBalances);}
 async function svclm(){await dbSet('ift_counterLabMeta',DB.counterLabMeta);}
 async function svst(){await dbSet('ift_settings',DB.settings);}
+async function svcar(){await dbSet('ift_cars',DB.cars);}
 async function svo(){await dbSet('ift_orders',DB.orders);await dbSet('ift_balances',DB.balances);}
 function n2bal(loc){return DB.nitrogenBalances[loc]||0;}
 
@@ -813,6 +815,7 @@ function weekDatesOf(dstr){
 function addDaysStr(dstr,n){const d=new Date(dstr+'T00:00:00');d.setDate(d.getDate()+n);return ymd(d);}
 let pendAtt=null;
 let pendUPhoto=null;
+let pendCarPhoto=null;
 let _actionLock=false;
 let preFetchedLoc=null,preFetchedLocAt=0,_locWarming=false;
 function prewarmLocation(){
@@ -1843,6 +1846,7 @@ function rRep(){
           </div>
           <div class="kv"><span>المندوب</span><b>${o.repName||'-'}</b></div>
           <div class="kv"><span>رقم العربية</span><b>${o.carNo||'-'}</b></div>
+          ${(o.driverPhoto||o.carPhoto)?`<div style="display:flex;gap:8px;align-items:center;margin:6px 0;">${o.driverPhoto?`<img src="${o.driverPhoto}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1.5px solid var(--line);" title="صورة السائق">`:''}${o.carPhoto?`<img src="${o.carPhoto}" style="width:44px;height:34px;border-radius:8px;object-fit:cover;border:1.5px solid var(--line);" title="صورة السيارة">`:''}</div>`:''}
           <div class="kv"><span>التاريخ</span><b>${new Date(o.updAt||Date.now()).toLocaleString('ar-EG')}</b></div>
           <div class="kv"><span>الموقع</span><b>${o.dloc
             ?`<a href="https://maps.google.com/?q=${o.dloc}" target="_blank" style="color:var(--blue2);font-weight:800;">🗺️ عرض على الخريطة</a>`
@@ -1931,6 +1935,7 @@ function rOrd(){
   }
   if(o.repReceivedAt&&o.stage!=='with_rep')flds+=`<div class="kv"><span>وقت استلام المندوب</span><b>${new Date(o.repReceivedAt).toLocaleString('ar-EG')} — ${o.repReceivedBy||''}</b></div>`;
   if(o.carNo)flds+=`<div class="kv"><span>رقم العربية</span><b>${o.carNo}</b></div>`;
+  if(o.driverPhoto||o.carPhoto)flds+=`<div class="kv" style="align-items:center;"><span>صورة السائق/السيارة</span><span style="display:flex;gap:8px;">${o.driverPhoto?`<img src="${o.driverPhoto}" style="width:38px;height:38px;border-radius:50%;object-fit:cover;border:1.5px solid var(--line);" title="صورة السائق">`:''}${o.carPhoto?`<img src="${o.carPhoto}" style="width:52px;height:38px;border-radius:8px;object-fit:cover;border:1.5px solid var(--line);" title="صورة السيارة">`:''}</span></div>`;
   if(o.rejectReason)flds+=`<div class="kv"><span>سبب الرفض</span><b style="color:var(--bad)">${o.rejectReason}</b></div>`;
   if(o.dloc)flds+=`<div class="kv"><span>موقع التسليم</span><b><a href="https://maps.google.com/?q=${o.dloc}" target="_blank" style="color:var(--blue2);">عرض على الخريطة 🗺️</a></b></div>`;
   flds+=`<div class="kv"><span>أنشئ بواسطة</span><b>${o.cbyn||o.cby||'-'}</b></div>`;
@@ -1954,9 +1959,10 @@ function rOrd(){
       <button class="bs bok" data-a="appr" data-id="${o.id}">${o.stage==='return_pending_acc'?'↩️ موافقة — إرسال للمخازن للتأكيد':o.stage==='customer_return_pending_acc'?'✓ موافقة — إرسال للسيارات':'✓ موافقة وترحيل'}</button>
     </div>`;
   } else if(canCars){
-    const repOpts=repOptions(),carOpts=carOptions();
+    const repOpts=repOptions();
     const curRep=(o.repName||'').trim(),curCar=(o.carNo||'').trim();
     const repIsOther=curRep&&!repOpts.includes(curRep);
+    const carOpts=DB.cars.map(c=>c.carNo);
     const carIsOther=curCar&&!carOpts.includes(curCar);
     acts += `<form id="carf" data-id="${o.id}">
       <div class="row2">
@@ -1973,10 +1979,11 @@ function rOrd(){
           <label>رقم العربية</label>
           <select name="cnSel" id="cnSel">
             <option value="">اختر رقم العربية...</option>
-            ${carOpts.map(c=>`<option value="${c}" ${c===curCar?'selected':''}>${c}</option>`).join('')}
-            <option value="__other__" ${carIsOther?'selected':''}>➕ رقم آخر...</option>
+            ${DB.cars.map(c=>`<option value="${c.carNo}" ${c.carNo===curCar?'selected':''}>🚗 ${c.carNo}</option>`).join('')}
+            <option value="__other__" ${carIsOther?'selected':''}>➕ رقم غير مسجّل...</option>
           </select>
           <input name="cnOther" id="cnOther" placeholder="اكتب رقم العربية" value="${carIsOther?curCar:''}" style="margin-top:6px;display:${carIsOther?'block':'none'};">
+          ${!DB.cars.length?`<div style="font-size:10.5px;color:var(--warn);margin-top:5px;">⚠️ لا توجد سيارات مسجّلة بصورة — أضفها من الإدارة أولاً لتظهر صورتها بالأوردر</div>`:''}
         </div>
       </div>
       <button class="bs bgo" type="submit" style="width:100%;">🚗 ترحيل إلى المخازن</button>
@@ -1995,7 +2002,11 @@ function rOrd(){
       <div class="brow"><button class="bs bgo" data-a="repret" data-id="${o.id}">🔁 تأكيد الإرجاع وإرسال للحسابات</button></div>`;
   } else if(canRR){
     acts += `<div class="card" style="background:var(--blue-lg);border-color:var(--blue2);margin-bottom:8px;">
-        <div style="font-weight:800;font-size:13px;margin-bottom:4px;">🧍 ${o.repName||'المندوب'} | 🚗 ${o.carNo||'-'}</div>
+        <div style="font-weight:800;font-size:13px;margin-bottom:4px;display:flex;align-items:center;gap:8px;">
+          🧍 ${o.repName||'المندوب'} | 🚗 ${o.carNo||'-'}
+          ${o.driverPhoto?`<img src="${o.driverPhoto}" style="width:26px;height:26px;border-radius:50%;object-fit:cover;border:1.5px solid #fff;">`:''}
+          ${o.carPhoto?`<img src="${o.carPhoto}" style="width:34px;height:26px;border-radius:6px;object-fit:cover;border:1.5px solid #fff;">`:''}
+        </div>
         <div style="font-size:12px;color:var(--muted);">الطلب وصل من المخزن وينتظر تأكيد استلامك</div>
       </div>
       <div class="brow"><button class="bs bgreen" data-a="rrcv" data-id="${o.id}">📦 تم الاستلام من المخزن</button></div>`;
@@ -2132,7 +2143,7 @@ function rCntLog(){
   </div>`;}
 
 function rAdm(){return`
-  <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف</div>
+  <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف · سيارات</div>
   <div class="content">
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
       <div style="font-weight:800;margin-bottom:6px;">🔗 كيف يدخل زملاؤك على البرنامج؟</div>
@@ -2194,6 +2205,21 @@ function rAdm(){return`
     ${DB.counters.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;cursor:pointer;" data-a="cntlog" data-cnt="${c.code}"><span>${(c.status==='ممتلئ')?'🟢':'🔴'} 🎫 ${c.code} ${c.name?'· '+c.name:''} <span style="color:var(--muted);font-size:10px;">(${ccap(c.code)})</span></span><b>👤 ${u2n(c.owner)||'بدون مسؤول'}</b></div>`).join('')}
     <div class="slabel">تعديل سعة كونتر (مدير النظام فقط)</div>
     <button class="bs bghost" style="width:100%;" data-a="editcap" type="button">✏️ تعديل سعة كونتر موجود</button>
+    <div class="slabel">🚗 إضافة سيارة</div>
+    <form id="acarf">
+      <div class="field"><label>رقم العربية</label><input name="carNo" placeholder="مثال: أ ب ج 1234" required></div>
+      <label class="attachbtn" for="cpf">📷 صورة السيارة (مطلوبة)</label>
+      <input type="file" id="cpf" accept="image/*" style="display:none;">
+      <div id="cpp"></div>
+      <button class="btn-primary" type="submit">إضافة السيارة</button>
+    </form>
+    <div class="slabel">السيارات المسجّلة (${DB.cars.length})</div>
+    ${DB.cars.length?DB.cars.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;align-items:center;">
+      <span style="display:flex;align-items:center;gap:8px;">
+        ${c.photo?`<img src="${c.photo}" style="width:38px;height:38px;border-radius:8px;object-fit:cover;border:1px solid var(--line);">`:''}
+        🚗 ${c.carNo}
+      </span>
+    </div>`).join(''):`<div style="font-size:11.5px;color:var(--muted);">لا توجد سيارات مسجّلة بعد</div>`}
   </div>`;}
 
 /* ===== BIND ===== */
@@ -2217,7 +2243,7 @@ function bind(){
       }
     });
   };
-  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);
+  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);f('acarf',onACar);
   const rnSelEl=document.getElementById('rnSel');
   if(rnSelEl)rnSelEl.addEventListener('change',()=>{const ot=document.getElementById('rnOther');if(ot)ot.style.display=rnSelEl.value==='__other__'?'block':'none';});
   const cnSelEl=document.getElementById('cnSel');
@@ -2235,6 +2261,7 @@ function bind(){
   bbl();tbbl();bsi();bhsi();bclsi();blcsi();checkInvDup();
   const af=document.getElementById('atf');if(af)af.addEventListener('change',onAtt);
   const upf=document.getElementById('upf');if(upf)upf.addEventListener('change',onUPhoto);
+  const cpf=document.getElementById('cpf');if(cpf)cpf.addEventListener('change',onCarPhoto);
 }
 
 function bbl(){
@@ -2373,6 +2400,19 @@ async function onUPhoto(e){
     pendUPhoto=ev.target.result;
     const p=document.getElementById('upp');
     if(p)p.innerHTML=`<div class="attachprev" style="display:flex;align-items:center;gap:8px;"><img src="${pendUPhoto}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">✅ تم اختيار الصورة</div>`;
+  };
+  r.readAsDataURL(file);
+}
+
+async function onCarPhoto(e){
+  const file=e.target.files[0];if(!file)return;
+  if(!file.type.startsWith('image/')){toast('الرجاء اختيار صورة');return;}
+  if(file.size>3*1024*1024){toast('حجم الصورة أكبر من 3MB — اختر صورة أصغر');return;}
+  const r=new FileReader();
+  r.onload=ev=>{
+    pendCarPhoto=ev.target.result;
+    const p=document.getElementById('cpp');
+    if(p)p.innerHTML=`<div class="attachprev" style="display:flex;align-items:center;gap:8px;"><img src="${pendCarPhoto}" style="width:36px;height:36px;border-radius:8px;object-fit:cover;">✅ تم اختيار صورة السيارة</div>`;
   };
   r.readAsDataURL(file);
 }
@@ -2597,6 +2637,11 @@ async function onCars(e){
   if(!rn){toast('⛔ الرجاء اختيار أو كتابة اسم المندوب');return;}
   if(!cn){toast('⛔ الرجاء اختيار أو كتابة رقم العربية');return;}
   o.repName=rn;o.carNo=cn;
+  // نلقط صورة السيارة (من سجل السيارات) وصورة السائق (من ملفه الشخصي) وقت الترحيل، عشان تفضل ثابتة بالأوردر حتى لو اتعدّلت بعدين — والسائق مش مربوط بعربية معينة، أي سائق ممكن ياخد أي عربية
+  const carRec=DB.cars.find(c=>c.carNo===cn);
+  o.carPhoto=carRec?carRec.photo:'';
+  const drvUser=DB.users.find(u=>u.role==='rep'&&(u.name===rn||u.username===rn));
+  o.driverPhoto=(drvUser&&drvUser.photo)?drvUser.photo:'';
   o.stage=(o.kind==='customer_return')?'customer_return_pending_wh':'pending_warehouse';
   o.updAt=Date.now();
   await svo();anim('جارِ الإرسال إلى المخازن',()=>{S.tab='home';S.oid=null;});
@@ -2830,6 +2875,16 @@ async function onAU(e){
   if(!pendUPhoto){toast('⛔ صورة المستخدم مطلوبة — اضغط على "صورة المستخدم" وارفع صورة أولاً');return;}
   DB.users.push({username:un,password:f.get('pw'),name:f.get('name'),role:f.get('role'),active:true,photo:pendUPhoto});
   await svu();toast('تم إضافة المستخدم');e.target.reset();pendUPhoto=null;render();
+}
+
+async function onACar(e){
+  e.preventDefault();const f=new FormData(e.target);
+  const carNo=(f.get('carNo')||'').trim();
+  if(!carNo){toast('⛔ الرجاء إدخال رقم العربية');return;}
+  if(DB.cars.some(c=>c.carNo===carNo)){toast('⛔ رقم العربية ده مسجّل بالفعل');return;}
+  if(!pendCarPhoto){toast('⛔ صورة السيارة مطلوبة — اضغط على "صورة السيارة" وارفع صورة أولاً');return;}
+  DB.cars.push({carNo,photo:pendCarPhoto,createdAt:Date.now()});
+  await svcar();toast('✅ تم تسجيل السيارة');e.target.reset();pendCarPhoto=null;const p=document.getElementById('cpp');if(p)p.innerHTML='';render();
 }
 
 async function onAC(e){
