@@ -25,14 +25,14 @@ input,select,textarea{font-family:inherit;outline:none;}
 #app{max-width:640px;margin:0 auto;height:100vh;height:100dvh;display:flex;flex-direction:column;background:var(--paper);position:relative;overflow:hidden;}
 
 /* WELCOME */
-.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,var(--blue) 0%,#0a2f55 70%,#061d35 100%);color:#fff;padding:48px 28px;text-align:center;overflow-y:auto;}
-.wlogo{width:100px;height:100px;border-radius:24px;background:#fff;padding:8px;margin-bottom:24px;box-shadow:0 16px 40px rgba(0,0,0,.3);object-fit:contain;}
-.welcome h1{font-size:26px;font-weight:900;margin-bottom:6px;}
-.corp{font-size:10px;letter-spacing:3px;color:#8BB4D4;margin-bottom:12px;}
-.welcome p{color:#A8C4DA;font-size:13px;line-height:2;max-width:300px;margin-bottom:28px;}
-.stages{display:flex;gap:5px;margin-bottom:32px;flex-wrap:wrap;justify-content:center;}
-.stages span{font-size:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);padding:4px 10px;border-radius:999px;color:#C5DCF0;}
-.btn-primary{background:var(--green);color:#fff;padding:15px 0;width:100%;max-width:300px;border-radius:13px;font-weight:800;font-size:15px;transition:.15s;box-shadow:0 10px 24px rgba(84,164,55,.35);}
+.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,#FFFFFF 0%,var(--blue-lg) 55%,#EAF2FB 100%);color:var(--blue);padding:48px 28px;text-align:center;overflow-y:auto;}
+.wlogo{width:92px;height:92px;border-radius:22px;background:#fff;padding:8px;margin-bottom:22px;box-shadow:0 6px 18px rgba(11,56,102,.10);object-fit:contain;}
+.welcome h1{font-size:24px;font-weight:800;margin-bottom:6px;color:var(--blue);}
+.corp{font-size:10px;letter-spacing:3px;color:#8CA9C4;margin-bottom:12px;font-weight:700;}
+.welcome p{color:var(--muted);font-size:13px;line-height:1.9;max-width:300px;margin-bottom:26px;font-weight:500;}
+.stages{display:flex;gap:5px;margin-bottom:30px;flex-wrap:wrap;justify-content:center;}
+.stages span{font-size:10px;background:#fff;border:1px solid var(--line);padding:4px 10px;border-radius:999px;color:var(--blue2);font-weight:600;}
+.btn-primary{background:var(--green);color:#fff;padding:14px 0;width:100%;max-width:300px;border-radius:12px;font-weight:700;font-size:14.5px;transition:.15s;box-shadow:0 4px 12px rgba(84,164,55,.18);}
 .btn-primary:active{transform:scale(.97);background:var(--green-d);}
 
 /* SIGNIN */
@@ -78,15 +78,15 @@ input,select,textarea{font-family:inherit;outline:none;}
 .kv b{color:var(--blue);font-weight:700;}
 
 /* TRACKER */
-.tracker{display:flex;align-items:flex-start;margin:10px 0 4px;}
+.tracker{position:relative;margin:12px 0 4px;padding-top:4px;}
+.trk-line{position:absolute;top:11px;height:2px;background:var(--line);z-index:1;}
+.trk-prog{position:absolute;top:11px;height:2px;background:var(--ok);z-index:1;transition:width .2s;}
+.trk-dots{display:flex;align-items:flex-start;position:relative;z-index:2;}
 .seg{flex:1;display:flex;flex-direction:column;align-items:center;position:relative;}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--line);z-index:2;border:2px solid #fff;}
 .seg.done .dot{background:var(--ok);}
 .seg.now .dot{background:var(--green);box-shadow:0 0 0 4px rgba(84,164,55,.2);}
 .seg.rej .dot{background:var(--bad);}
-.seg::before{content:'';position:absolute;top:4px;right:50%;width:100%;height:2px;background:var(--line);z-index:1;}
-.seg:first-child::before{display:none;}
-.seg.done::before,.seg.now::before{background:var(--ok);}
 .tlbl{font-size:8px;color:var(--muted);margin-top:5px;text-align:center;line-height:1.3;}
 .seg.now .tlbl{color:var(--green);font-weight:800;}
 .seg.rej .tlbl{color:var(--bad);font-weight:800;}
@@ -124,6 +124,26 @@ input,select,textarea{font-family:inherit;outline:none;}
 .pillbar::-webkit-scrollbar{display:none;}
 .pillbar button{white-space:nowrap;padding:7px 13px;border-radius:999px;background:#fff;border:1.5px solid var(--line);font-size:11.5px;font-weight:700;color:var(--muted);}
 .pillbar button.on{background:var(--blue);color:#fff;border-color:var(--blue);}
+
+/* CALENDAR STRIP */
+.calwrap{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:10px 8px;margin-bottom:12px;box-shadow:var(--sh);}
+.calhead{display:flex;align-items:center;justify-content:space-between;padding:0 4px 8px;}
+.calhead .calnav{background:var(--blue-lg);color:var(--blue);width:26px;height:26px;border-radius:8px;font-size:14px;font-weight:900;display:flex;align-items:center;justify-content:center;}
+.calhead .caltitle{font-size:12.5px;font-weight:800;color:var(--blue);}
+.calhead .caltoday{font-size:10.5px;font-weight:800;color:var(--green);background:var(--green-lg);padding:4px 9px;border-radius:999px;}
+.calrow{display:flex;gap:4px;}
+.calday{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 2px 6px;border-radius:10px;background:var(--paper);position:relative;}
+.calday .cwd{font-size:9px;color:var(--muted);font-weight:700;}
+.calday .cnum{font-size:13px;font-weight:800;color:var(--blue);}
+.calday .cdot{width:4px;height:4px;border-radius:50%;background:var(--green);position:absolute;bottom:3px;}
+.calday.today .cnum{color:var(--green);}
+.calday.sel{background:var(--blue);}
+.calday.sel .cwd{color:#C5DCF0;}
+.calday.sel .cnum{color:#fff;}
+.calday.sel .cdot{background:#fff;}
+.calallbtn{margin-top:8px;text-align:center;font-size:11px;font-weight:800;color:var(--blue2);cursor:pointer;padding:6px;border-top:1px dashed var(--line);}
+.calallbtn.on{color:var(--green);}
+.schedbadge{display:inline-flex;align-items:center;gap:4px;background:var(--blue-lg);color:var(--blue2);font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:999px;margin-top:6px;}
 table.rep{width:100%;border-collapse:collapse;font-size:11px;}
 table.rep th,table.rep td{padding:7px 5px;border-bottom:1px solid var(--line);text-align:right;}
 table.rep th{color:var(--muted);font-weight:800;font-size:10px;background:var(--paper);}
@@ -610,21 +630,26 @@ function updateBG(){
 }
 
 async function loadDB(){
-  DB.users=await dbGet('ift_users',null);
+  const keys=[
+    ['users','ift_users',null],
+    ['customers','ift_customers',[{code:'C001',name:'صيدلية النور'},{code:'C002',name:'مجمع الشفاء'}]],
+    ['items','ift_items',[{code:'I001',name:'أمبولات فيتامين ب12',unit:'علبة'},{code:'I002',name:'محلول ملحي 500مل',unit:'كيس'}]],
+    ['orders','ift_orders',[]],
+    ['balances','ift_balances',{}],
+    ['sectors','ift_sectors',[{code:'S1',name:'بيطري'},{code:'S2',name:'بشري'},{code:'S3',name:'أعلاف'}]],
+    ['labs','ift_labs',[]],
+    ['counters','ift_counters',[]],
+    ['labBalances','ift_labBalances',{}],
+    ['counterBalances','ift_counterBalances',{}],
+    ['counterLog','ift_counterLog',[]],
+    ['nitrogenBalances','ift_nitrogenBalances',{}],
+    ['counterLabMeta','ift_counterLabMeta',{}],
+    ['settings','ift_settings',{n2DailyLossPct:3,n2MinThreshold:10}],
+  ];
+  // نجيب كل المفاتيح مع بعض بالتوازي بدل واحد ورا التاني — بيقلل زمن الدخول بشكل كبير
+  const results=await Promise.all(keys.map(([,k,fb])=>dbGet(k,fb)));
+  keys.forEach(([prop],i)=>{DB[prop]=results[i];});
   if(!DB.users||!DB.users.length){DB.users=[{username:'admin',password:'admin123',name:'مدير النظام',role:'admin',active:true}];await dbSet('ift_users',DB.users);}
-  DB.customers=await dbGet('ift_customers',[{code:'C001',name:'صيدلية النور'},{code:'C002',name:'مجمع الشفاء'}]);
-  DB.items=await dbGet('ift_items',[{code:'I001',name:'أمبولات فيتامين ب12',unit:'علبة'},{code:'I002',name:'محلول ملحي 500مل',unit:'كيس'}]);
-  DB.orders=await dbGet('ift_orders',[]);
-  DB.balances=await dbGet('ift_balances',{});
-  DB.sectors=await dbGet('ift_sectors',[{code:'S1',name:'بيطري'},{code:'S2',name:'بشري'},{code:'S3',name:'أعلاف'}]);
-  DB.labs=await dbGet('ift_labs',[]);
-  DB.counters=await dbGet('ift_counters',[]);
-  DB.labBalances=await dbGet('ift_labBalances',{});
-  DB.counterBalances=await dbGet('ift_counterBalances',{});
-  DB.counterLog=await dbGet('ift_counterLog',[]);
-  DB.nitrogenBalances=await dbGet('ift_nitrogenBalances',{});
-  DB.counterLabMeta=await dbGet('ift_counterLabMeta',{});
-  DB.settings=await dbGet('ift_settings',{n2DailyLossPct:3,n2MinThreshold:10});
 }
 async function svu(){await dbSet('ift_users',DB.users);}
 async function svc(){await dbSet('ift_customers',DB.customers);}
@@ -769,7 +794,23 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false};
+
+// ===== أدوات التاريخ الخاصة بالكالندر =====
+function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
+function orderDateStr(o){return o.schedDate||ymd(o.createdAt||Date.now());}
+const AR_WD=['أحد','اثنين','ثلاثاء','أربعاء','خميس','جمعة','سبت'];
+const AR_WD_S=['ح','ن','ث','ر','خ','ج','س'];
+function weekDatesOf(dstr){
+  const anchor=new Date(dstr+'T00:00:00');
+  const dow=anchor.getDay(); // 0=Sun..6=Sat
+  const diffToSat=(dow+1)%7; // فرق الأيام عن أقرب سبت سابق (بداية الأسبوع)
+  const start=new Date(anchor);start.setDate(anchor.getDate()-diffToSat);
+  const days=[];
+  for(let i=0;i<7;i++){const d=new Date(start);d.setDate(start.getDate()+i);days.push(d);}
+  return days;
+}
+function addDaysStr(dstr,n){const d=new Date(dstr+'T00:00:00');d.setDate(d.getDate()+n);return ymd(d);}
 let pendAtt=null;
 let pendUPhoto=null;
 let _actionLock=false;
@@ -803,7 +844,16 @@ function routeFromMsg(msg){
   return {origin,dest};
 }
 
-async function init(){nightMode=localStorage.getItem(NIGHT_KEY)==='1';applyNight();await loadDB();if(IS_CONFIGURED){startRealTimeSync();}S.screen='welcome';render();loadWeather();}
+let dbReady=false;
+async function init(){
+  nightMode=localStorage.getItem(NIGHT_KEY)==='1';applyNight();
+  S.screen='welcome';render(); // نعرض شاشة الدخول فورًا من غير ما ننتظر تحميل قاعدة البيانات
+  loadWeather();
+  await loadDB();
+  dbReady=true;
+  if(IS_CONFIGURED){startRealTimeSync();}
+  if(S.screen==='signin')render(); // لو كانت شاشة الدخول متفتحة وقت اكتمال التحميل، نحدّثها
+}
 init();
 
 function render(){
@@ -874,7 +924,7 @@ function rSI(){return `<div class="signin">
   <img class="slogo" src="${LOGO}" alt="IFT">
   <h2>تسجيل الدخول</h2>
   <div class="sub">IFT Corporation — نظام بضاعة الأمانة</div>
-  ${S.err?`<div class="err">${S.err}</div>`:''}
+  ${S.err?`<div class="err">${S.err}</div>`:!dbReady?`<div style="background:var(--blue-lg);color:var(--blue2);font-size:12px;font-weight:700;padding:8px 12px;border-radius:9px;margin-bottom:14px;">⏳ جارِ تجهيز البيانات في الخلفية...</div>`:''}
   <form id="sif">
     <div class="field"><label>اسم المستخدم</label><input name="un" autocomplete="username" required></div>
     <div class="field"><label>كلمة المرور</label><input type="password" name="pw" autocomplete="current-password" required></div>
@@ -1036,28 +1086,79 @@ function rCard(o){
     <div class="kv"><span>الحالة</span><b style="color:${sc}">${stageLabel(o)}</b></div>
     <div class="kv"><span>الكمية</span><b>${o.qty||'-'}</b></div>
     <div class="kv"><span>بواسطة</span><b>${o.cbyn||o.cby||'-'}</b></div>
+    ${o.schedDate?`<div class="schedbadge">📅 يوم الصرف: ${schedDateLabel(o.schedDate)}</div>`:''}
     ${rTrk(o)}</div>`;}
+
+function schedDateLabel(ds){
+  try{const d=new Date(ds+'T00:00:00');return d.toLocaleDateString('ar-EG',{weekday:'short',day:'numeric',month:'short'});}catch(_){return ds;}
+}
+
+// رسم شريط التتبع (الوركفلو) بطريقة مستقلة عن اتجاه الصفحة (RTL) عشان الخط يوصل صح بين كل نقطة والتانية
+function drawTracker(steps,idx,rejIdx){
+  const n=steps.length;
+  const edge=50/n; // % من الحافة لمركز أول/آخر نقطة
+  const span=100-2*edge; // % طول الخط الكامل بين مركزي أول وآخر نقطة
+  const frac=n>1?Math.max(0,Math.min(1,idx/(n-1))):0;
+  const isRej=rejIdx!=null;
+  const progColor=isRej?'var(--bad)':'var(--ok)';
+  const progW=isRej?(span*(rejIdx/(n-1))):(span*frac);
+  const dots=steps.map((s,i)=>{let c=i<idx?'done':i===idx?'now':'';if(isRej&&i===rejIdx)c='rej';return`<div class="seg ${c}"><div class="dot"></div><div class="tlbl">${s.l}</div></div>`;}).join('');
+  return`<div class="tracker">
+    <div class="trk-line" style="right:${edge}%;left:${edge}%"></div>
+    <div class="trk-prog" style="right:${edge}%;width:${progW}%;background:${progColor}"></div>
+    <div class="trk-dots">${dots}</div>
+  </div>`;
+}
 
 function rTrk(o){
   if(o.kind==='transfer'){
     const steps=[{l:'إدخال'},{l:'حسابات'},{l:'تنفيذ'}];
-    const idx=o.stage==='approved'?2:o.stage==='rejected'?1:1;
-    return`<div class="tracker">${steps.map((s,i)=>{let c=i<idx?'done':i===idx?'now':'';if(o.stage==='rejected'&&i===1)c='rej';return`<div class="seg ${c}"><div class="dot"></div><div class="tlbl">${s.l}</div></div>`;}).join('')}</div>`;
+    const idx=o.stage==='approved'?2:1;
+    return drawTracker(steps,idx,o.stage==='rejected'?1:null);
   }
   if(o.kind==='addition'){
     const idx=sidxAdd(o);
-    return`<div class="tracker">${ADD_STEPS.map((s,i)=>{let c=i<idx?'done':i===idx?'now':'';if(o.stage==='rejected'&&i===1)c='rej';if(o.stage==='approved')c='done';return`<div class="seg ${c}"><div class="dot"></div><div class="tlbl">${s.l}</div></div>`;}).join('')}</div>`;
+    return drawTracker(ADD_STEPS,o.stage==='approved'?ADD_STEPS.length-1:idx,o.stage==='rejected'?1:null);
   }
   if(o.kind==='return'){
     const idx=sidxRet(o);
-    return`<div class="tracker">${RET_STEPS.map((s,i)=>{let c=i<idx?'done':i===idx?'now':'';if(o.stage==='returned')c='done';return`<div class="seg ${c}"><div class="dot"></div><div class="tlbl">${s.l}</div></div>`;}).join('')}</div>`;
+    return drawTracker(RET_STEPS,o.stage==='returned'?RET_STEPS.length-1:idx,null);
   }
   if(o.kind==='customer_return'){
     const idx=sidxCret(o);
-    return`<div class="tracker">${CRET_STEPS.map((s,i)=>{let c=i<idx?'done':i===idx?'now':'';if(o.stage==='customer_returned')c='done';return`<div class="seg ${c}"><div class="dot"></div><div class="tlbl">${s.l}</div></div>`;}).join('')}</div>`;
+    return drawTracker(CRET_STEPS,o.stage==='customer_returned'?CRET_STEPS.length-1:idx,null);
   }
   const idx=sidxWd(o);
-  return`<div class="tracker">${WD_STEPS.map((s,i)=>{let c=i<idx?'done':i===idx?'now':'';if(o.stage==='rejected'&&i===1)c='rej';return`<div class="seg ${c}"><div class="dot"></div><div class="tlbl">${s.l}</div></div>`;}).join('')}</div>`;}
+  return drawTracker(WD_STEPS,idx,o.stage==='rejected'?1:null);
+}
+
+function rCal(listForDots){
+  const sel=S.calDate||ymd(Date.now());
+  const days=weekDatesOf(sel);
+  const today=ymd(Date.now());
+  const counts={};
+  listForDots.forEach(o=>{const k=orderDateStr(o);counts[k]=(counts[k]||0)+1;});
+  const first=days[0],last=days[6];
+  const monthLbl=first.toLocaleDateString('ar-EG',{month:'long',year:'numeric'});
+  return`<div class="calwrap">
+    <div class="calhead">
+      <button type="button" class="calnav" data-a="calweek" data-dir="-1">›</button>
+      <div class="caltitle">${monthLbl}</div>
+      <button type="button" class="calnav" data-a="calweek" data-dir="1">‹</button>
+    </div>
+    <div class="calrow">${days.map(d=>{
+      const ds=ymd(d);
+      const isSel=!S.calAll&&ds===sel;
+      const isToday=ds===today;
+      return`<div class="calday ${isSel?'sel':''} ${isToday?'today':''}" data-a="calday" data-date="${ds}">
+        <div class="cwd">${AR_WD_S[d.getDay()]}</div>
+        <div class="cnum">${d.getDate()}</div>
+        ${counts[ds]?`<div class="cdot"></div>`:''}
+      </div>`;
+    }).join('')}</div>
+    <div class="calallbtn ${S.calAll?'on':''}" data-a="calall">${S.calAll?'✅ عرض كل الأيام — اضغطي على يوم للتصفية':'عرض كل الطلبات (بدون تصفية باليوم)'}</div>
+  </div>`;
+}
 
 function rHome(){
   const u=S.user;
@@ -1085,17 +1186,21 @@ function rHome(){
       return name.includes(q.toLowerCase())||dateStr.includes(q)||dateStr2.includes(q)||(o.inv||'').toLowerCase().includes(q.toLowerCase());
     });
   }
+  const listForDots=list; // قبل تصفية اليوم، عشان نقاط الكالندر تعكس كل الطلبات المتاحة
+  const sel=S.calDate||ymd(Date.now());
+  if(!S.calAll&&!q&&!(S.hflt&&S.hflt.length))list=list.filter(o=>orderDateStr(o)===sel);
   const chips=groups.filter(c=>c.roles.includes(u.role));
   return`
   <div class="stitle">${S.hflt&&S.hflt.length?'مرشّح: '+(S.hfltLabel||''):'الرئيسية'}</div>
   <div class="ssub">${list.length} طلب${S.hflt&&S.hflt.length?` · <span style="color:var(--green);cursor:pointer;" data-a="clf">إلغاء ✕</span>`:''}</div>
   <div class="content">
+    ${rCal(listForDots)}
     <div class="field"><input id="hsi" placeholder="🔎 بحث بالاسم أو التاريخ (مثال: 12/07 أو اسم العميل)..." value="${q.replace(/"/g,'&quot;')}"></div>
     ${chips.length?`<div class="grid${chips.length>2?'3':'2'}" style="margin-bottom:14px;">${chips.map(c=>`<div class="rbox" style="text-align:center;position:relative;" data-a="flt" data-stage="${c.stages.join(',')}" data-label="${c.l}">
       ${c.retCnt>0?`<span style="position:absolute;top:6px;left:6px;background:var(--warn);color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:999px;">↩️ ${c.retCnt}</span>`:''}
       <div style="font-size:20px;">${c.ic}</div><div class="big" style="color:${c.total>0?'var(--green)':'var(--muted)'}">${c.total}</div><div class="lab">${c.l}</div>
     </div>`).join('')}</div>`:''}
-    ${list.length===0?`<div class="empty"><div class="ic">📭</div><div class="t">لا توجد طلبات حالياً</div></div>`:list.map(rCard).join('')}
+    ${list.length===0?`<div class="empty"><div class="ic">📭</div><div class="t">${(!S.calAll&&!q&&!(S.hflt&&S.hflt.length))?'لا توجد طلبات في هذا اليوم':'لا توجد طلبات حالياً'}</div></div>`:list.map(rCard).join('')}
   </div>`;}
 
 function rNew(){const t=S.ntype;return`
@@ -1118,6 +1223,7 @@ function rNew(){const t=S.ntype;return`
   </div>`;}
 
 function rConsF(){return`
+  <div class="field"><label>📅 يوم الصرف/الاستهلاك</label><input type="date" name="schedDate" id="cdate" value="${S.calAll?ymd(Date.now()):(S.calDate||ymd(Date.now()))}" required></div>
   <div class="row2">
     <div class="field"><label>كود العميل</label><select name="cc" id="ccc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
     <div class="field"><label>الاسم</label><input name="cn" id="ccn" readonly></div>
@@ -1184,6 +1290,7 @@ async function onConsume(e){
   if(DB.labBalances[k]===0)delete DB.labBalances[k];
   await svlb();
   const o={id:uid('cs'),kind:'consumption',stage:'done',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
+    schedDate:(f.get('schedDate')||'').trim()||ymd(Date.now()),
     ccode:cc,cname:f.get('cn'),labCode,labName:lab.name,icode:ic,iname:f.get('iname'),batch,qty,note:f.get('note')};
   DB.orders.push(o);await svo();
   toast(`✅ تم تسجيل استهلاك ${qty} وخصمها من رصيد المعمل`);e.target.reset();render();
@@ -1246,6 +1353,7 @@ function rSubF(){
   </div>
   <input type="hidden" name="orderType" value="${wt}">
   ${wt==='regular'?`<div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;">ℹ️ الأوردر العادي بيمشي بنفس خطوات الموافقة، لكنه لا يخصم من رصيد أمانة العميل ولا يُسجَّل في أرصدة المعامل.</div>`:''}
+  <div class="field"><label>📅 يوم الصرف</label><input type="date" name="schedDate" id="sdate" value="${S.calAll?ymd(Date.now()):(S.calDate||ymd(Date.now()))}" required></div>
   <div class="row2">
     <div class="field"><label>كود العميل</label><select name="cc" id="scc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
     <div class="field"><label>اسم العميل</label><input name="cn" id="scn" readonly></div>
@@ -1280,6 +1388,7 @@ function updateLabOptions(cc){
 function rTr(){return`
   <div class="stitle">تحويل بين المعامل</div><div class="ssub">تحويل بضاعة و/أو كونتر بين معملين تابعين لنفس العميل (بعد ما تكون اتصرفت فعلاً للعميل)</div>
   <div class="content"><form id="trf">
+    <div class="field"><label>📅 يوم التحويل</label><input type="date" name="schedDate" id="tdate" value="${S.calAll?ymd(Date.now()):(S.calDate||ymd(Date.now()))}" required></div>
     <div class="row2">
       <div class="field"><label>كود العميل</label><select name="cc" id="tcc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
       <div class="field"><label>الاسم</label><input name="cn" id="tcn" readonly></div>
@@ -2271,7 +2380,7 @@ async function onUPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -2297,6 +2406,9 @@ function onA(e){
   else if(a==='wtype'){S.wtype=el.dataset.wt;render();}
   else if(a==='flt'){if(S.user.role==='admin'){S.hflt=el.dataset.stage.split(',');S.hfltLabel=el.dataset.label||'';render();}}
   else if(a==='clf'){S.hflt=null;S.hfltLabel='';render();}
+  else if(a==='calday'){S.calDate=el.dataset.date;S.calAll=false;render();}
+  else if(a==='calweek'){S.calDate=addDaysStr(S.calDate||ymd(Date.now()),7*(+el.dataset.dir));render();}
+  else if(a==='calall'){S.calAll=!S.calAll;render();}
   else if(a==='open'){S.oid=id;S.tab='order';render();}
   else if(a==='back'){S.tab='home';S.oid=null;render();}
   else if(a==='rrng'){S.rng=el.dataset.rng;render();}
@@ -2347,6 +2459,7 @@ function doComplain(){
 async function onSI(e){
   e.preventDefault();const f=new FormData(e.target);
   const un=f.get('un').trim(),pw=f.get('pw');
+  if(!dbReady){S.err='جارِ تحميل البيانات... حاول بعد ثانية';render();return;}
   if((!DB.users||!DB.users.length)&&un==='admin'&&pw==='admin123'){DB.users=[{username:'admin',password:'admin123',name:'مدير النظام',role:'admin',active:true}];await svu();}
   const u=DB.users.find(x=>x.username===un&&x.password===pw);
   if(!u){S.err='اسم المستخدم أو كلمة المرور غير صحيحة';render();return;}
@@ -2403,6 +2516,7 @@ async function onNew(e){
     }
   }
   const o={id:uid('o'),kind,stage:'pending_accounts',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
+    schedDate:(f.get('schedDate')||'').trim()||ymd(Date.now()),
     inv:f.get('inv')||'',ccode:cc,cname:f.get('cn'),icode:ic,iname:f.get('iname'),
     batch:batchVal,expiry:f.get('expiry'),qty,note:f.get('note')||'',
     orderType,
@@ -2461,6 +2575,7 @@ async function onTrf(e){
     await logCounterMove(counterCode,'تحويل بين معامل',counterQty,labF.name,labT.name,0,'');
   }
   const o={id:uid('lt'),kind:'lab_transfer',stage:'done',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
+    schedDate:(f.get('schedDate')||'').trim()||ymd(Date.now()),
     ccode:cc,cname:f.get('cn'),flabCode:flab,flabName:labF.name,tlabCode:tlab,tlabName:labT.name,
     icode:wantsGoods?ic:'',iname:wantsGoods?f.get('iname'):'',batch:wantsGoods?batch:'',qty:wantsGoods?qty:0,
     counterCode:wantsCounter?counterCode:'',counterName:wantsCounter?cnname(counterCode):'',counterQty:wantsCounter?counterQty:0,
