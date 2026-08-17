@@ -188,6 +188,37 @@ table.rep th{color:var(--muted);font-weight:800;font-size:10px;background:var(--
 @media(min-width:640px){#app{box-shadow:0 0 40px rgba(11,56,102,.12);}}
 @media print{.tabbar,.topbar,.brow,.pillbar,button,[data-a]{display:none!important;}body{background:#fff;}.content{padding:0;}.card{box-shadow:none;border:1px solid #ddd;page-break-inside:avoid;}}
 
+/* MANIFEST — كشف تحرك المندوب (صفحة طباعة مستقلة بالعرض) */
+.manifest-outer{background:#e9edf2;min-height:100vh;padding:18px 12px 40px;}
+.manifest-bar{max-width:1000px;margin:0 auto 14px;display:flex;gap:8px;justify-content:flex-end;}
+.manifest-bar button{padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:800;}
+.mpaper{background:#fff;max-width:1000px;margin:0 auto;padding:22px 26px;box-shadow:0 4px 18px rgba(0,0,0,.12);border-radius:6px;}
+.mhead{display:flex;align-items:center;justify-content:space-between;border-bottom:2.5px solid var(--blue);padding-bottom:12px;margin-bottom:14px;}
+.mhead .mh-l{display:flex;align-items:center;gap:10px;}
+.mhead .mh-l img{width:46px;height:46px;border-radius:9px;object-fit:contain;}
+.mhead h2{font-size:16px;font-weight:900;color:var(--blue);}
+.mhead .mh-sub{font-size:10.5px;color:var(--muted);font-weight:700;letter-spacing:.5px;}
+.mhead .mh-r{text-align:left;font-size:11px;color:var(--muted);font-weight:700;}
+.mdrv{display:flex;gap:26px;margin-bottom:16px;flex-wrap:wrap;}
+.mdrv-card{display:flex;align-items:center;gap:10px;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:8px 16px;}
+.mdrv-card img{width:44px;height:44px;object-fit:cover;border:1.5px solid var(--blue2);}
+.mdrv-card img.round{border-radius:50%;}
+.mdrv-card img.sq{border-radius:8px;}
+.mdrv-card .mdrv-lbl{font-size:9.5px;color:var(--muted);font-weight:700;}
+.mdrv-card .mdrv-val{font-size:13px;font-weight:900;color:var(--blue);}
+table.mtbl{width:100%;border-collapse:collapse;font-size:10.5px;}
+table.mtbl th{background:var(--blue);color:#fff;font-weight:800;padding:7px 5px;text-align:center;}
+table.mtbl td{padding:6px 5px;border-bottom:1px solid #ddd;text-align:center;}
+table.mtbl tr:nth-child(even) td{background:#f6f8fa;}
+.msig{display:flex;justify-content:space-between;margin-top:34px;padding-top:10px;}
+.msig .sigbox{width:44%;text-align:center;}
+.msig .sigline{border-top:1.5px solid #333;margin-top:38px;padding-top:5px;font-size:11px;font-weight:800;color:var(--muted);}
+@media print{
+  @page{size:A4 landscape;margin:8mm;}
+  .manifest-outer{background:#fff;padding:0;}
+  .mpaper{box-shadow:none;max-width:100%;padding:4mm 8mm;border-radius:0;}
+}
+
   .bottom-logo{position:fixed !important;bottom:60px;left:12px !important;right:auto !important;z-index:25;width:44px;height:44px;border-radius:10px;background:#fff;padding:3px;box-shadow:0 2px 8px rgba(0,0,0,.15);object-fit:contain;opacity:.85;}
   @media(max-width:640px){.bottom-logo{bottom:58px;left:8px !important;right:auto !important;width:38px;height:38px;}}
 
@@ -806,7 +837,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -909,7 +940,8 @@ function render(){
   applyNight();
   const app=document.getElementById('app');
   let h='';
-  if(S.screen==='setup')h=rSetup();
+  if(S.printRep)h=rManifest(S.printRep);
+  else if(S.screen==='setup')h=rSetup();
   else if(S.screen==='welcome')h=rWel();
   else if(S.screen==='signin')h=rSI();
   else h=rShell();
@@ -1574,6 +1606,61 @@ function inRng(o,r){
   return true;
 }
 
+function rManifest(rn){
+  const myOrds=DB.orders.filter(o=>o.repName&&o.repName.trim()===rn&&['pending_rep','with_rep'].includes(o.stage)).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+  const drvUser=DB.users.find(u=>u.role==='rep'&&u.name===rn);
+  // نحدد صورة السيارة الأكثر تكرارًا بين أوردرات المندوب الحالية (رحلة واحدة غالبًا بعربية واحدة)
+  const carCounts={};
+  myOrds.forEach(o=>{if(o.carNo)carCounts[o.carNo]=(carCounts[o.carNo]||0)+1;});
+  const topCarNo=Object.entries(carCounts).sort((a,b)=>b[1]-a[1])[0]?.[0];
+  const carOrd=[...myOrds].reverse().find(o=>o.carNo===topCarNo);
+  const carPhoto=carOrd?carOrd.carPhoto:'';
+  const driverPhoto=(drvUser&&drvUser.photo)?drvUser.photo:(carOrd?carOrd.driverPhoto:'');
+  const now=new Date();
+  return `<div class="manifest-outer">
+    <div class="manifest-bar">
+      <button type="button" class="bs bghost" data-a="back-manifest">◀ رجوع</button>
+      <button type="button" class="bs bgo" data-a="pdf">🖨️ طباعة</button>
+    </div>
+    <div class="mpaper">
+      <div class="mhead">
+        <div class="mh-l">
+          <img src="${LOGO}" alt="IFT">
+          <div><h2>كشف تحرك مندوب</h2><div class="mh-sub">IFT CORPORATION — بضاعة الأمانة</div></div>
+        </div>
+        <div class="mh-r">تاريخ الطباعة: ${now.toLocaleDateString('ar-EG')}<br>عدد الأوردرات: ${myOrds.length}</div>
+      </div>
+      <div class="mdrv">
+        <div class="mdrv-card">
+          ${driverPhoto?`<img class="round" src="${driverPhoto}" alt="">`:''}
+          <div><div class="mdrv-lbl">اسم السائق / المندوب</div><div class="mdrv-val">${rn}</div></div>
+        </div>
+        <div class="mdrv-card">
+          ${carPhoto?`<img class="sq" src="${carPhoto}" alt="">`:''}
+          <div><div class="mdrv-lbl">رقم العربية</div><div class="mdrv-val">${topCarNo||'-'}</div></div>
+        </div>
+      </div>
+      <table class="mtbl">
+        <thead><tr><th>#</th><th>تاريخ الأوردر</th><th>اسم العميل</th><th>المعمل</th><th>كود الصنف</th><th>اسم الصنف</th><th>التشغيلة</th><th>تاريخ الانتهاء</th></tr></thead>
+        <tbody>${myOrds.length?myOrds.map((o,i)=>`<tr>
+          <td>${i+1}</td>
+          <td>${schedDateLabel(orderDateStr(o))}</td>
+          <td>${o.cname||o.ccode||'-'}</td>
+          <td>${o.labName||'-'}</td>
+          <td>${o.icode||'-'}</td>
+          <td>${o.iname||'-'}</td>
+          <td>${o.batch||'-'}</td>
+          <td>${o.expiry?new Date(o.expiry).toLocaleDateString('ar-EG'):'-'}</td>
+        </tr>`).join(''):`<tr><td colspan="8" style="padding:16px;color:var(--muted);">لا توجد أوردرات حالية مع هذا المندوب</td></tr>`}</tbody>
+      </table>
+      <div class="msig">
+        <div class="sigbox"><div class="sigline">توقيع المندوب</div></div>
+        <div class="sigbox"><div class="sigline">توقيع المسؤول</div></div>
+      </div>
+    </div>
+  </div>`;
+}
+
 function rRep(){
   const rng=S.rng, u=S.user;
   const isAdmin = ['admin','accounts','warehouse','quality'].includes(u.role); // الحسابات والمخازن والجودة والأدمن يشوفوا كل التقارير، مدخل البيانات يشوف عملاءه فقط
@@ -1723,6 +1810,7 @@ function rRep(){
             </div>`).join('')}
           </div>`:''}
           <div class="kv" style="margin-top:6px;"><span>إجمالي الكميات المُسلَّمة</span><b style="color:var(--ok)">${totalDlv}</b></div>
+          ${pending>0?`<button type="button" class="bs bgo" style="width:100%;margin-top:9px;" data-a="printrep" data-rep="${rn}">🖨️ طباعة كشف تحرك (${pending} أوردر لم يُنفَّذ بعد)</button>`:''}
         </div>`;
       }).join('');
     })()}
@@ -2470,7 +2558,7 @@ async function onCarPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -2480,6 +2568,8 @@ function onA(e){
   if(a==='theme'){nightMode=!nightMode;localStorage.setItem(NIGHT_KEY,nightMode?'1':'0');_lastBGTab=null;render();}
   else if(a==='go-si'){stopAmbient();S.screen='signin';S.err='';render();}
   else if(a==='music'){toggleAmbient();render();}
+  else if(a==='printrep'){S.printRep=el.dataset.rep;render();}
+  else if(a==='back-manifest'){S.printRep=null;render();}
   else if(a==='cancel'){doCancel(id);}
   else if(a==='custret'){doCustReturn(id);}
   else if(a==='rcvcnt'){doReceiveCounter();}
