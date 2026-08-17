@@ -25,15 +25,25 @@ input,select,textarea{font-family:inherit;outline:none;}
 #app{max-width:640px;margin:0 auto;height:100vh;height:100dvh;display:flex;flex-direction:column;background:var(--paper);position:relative;overflow:hidden;}
 
 /* WELCOME */
-.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,#FFFFFF 0%,var(--blue-lg) 55%,#EAF2FB 100%);color:var(--blue);padding:48px 28px;text-align:center;overflow-y:auto;}
-.wlogo{width:92px;height:92px;border-radius:22px;background:#fff;padding:8px;margin-bottom:22px;box-shadow:0 6px 18px rgba(11,56,102,.10);object-fit:contain;}
-.welcome h1{font-size:24px;font-weight:800;margin-bottom:6px;color:var(--blue);}
-.corp{font-size:10px;letter-spacing:3px;color:#8CA9C4;margin-bottom:12px;font-weight:700;}
-.welcome p{color:var(--muted);font-size:13px;line-height:1.9;max-width:300px;margin-bottom:26px;font-weight:500;}
-.stages{display:flex;gap:5px;margin-bottom:30px;flex-wrap:wrap;justify-content:center;}
-.stages span{font-size:10px;background:#fff;border:1px solid var(--line);padding:4px 10px;border-radius:999px;color:var(--blue2);font-weight:600;}
-.btn-primary{background:var(--green);color:#fff;padding:14px 0;width:100%;max-width:300px;border-radius:12px;font-weight:700;font-size:14.5px;transition:.15s;box-shadow:0 4px 12px rgba(84,164,55,.18);}
+.welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,var(--blue) 0%,#0a2f55 70%,#061d35 100%);color:#fff;padding:48px 28px;text-align:center;overflow-y:auto;}
+.wlogo{width:100px;height:100px;border-radius:24px;background:#fff;padding:8px;margin-bottom:24px;box-shadow:0 16px 40px rgba(0,0,0,.3);object-fit:contain;}
+.welcome h1{font-size:26px;font-weight:900;margin-bottom:6px;}
+.corp{font-size:10px;letter-spacing:3px;color:#8BB4D4;margin-bottom:12px;}
+.welcome p{color:#A8C4DA;font-size:13px;line-height:2;max-width:300px;margin-bottom:28px;}
+.stages{display:flex;gap:5px;margin-bottom:32px;flex-wrap:wrap;justify-content:center;}
+.stages span{font-size:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);padding:4px 10px;border-radius:999px;color:#C5DCF0;}
+.btn-primary{background:var(--green);color:#fff;padding:15px 0;width:100%;max-width:300px;border-radius:13px;font-weight:800;font-size:15px;transition:.15s;box-shadow:0 10px 24px rgba(84,164,55,.35);}
 .btn-primary:active{transform:scale(.97);background:var(--green-d);}
+.musicbtn{display:inline-flex;align-items:center;gap:7px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2);color:#C5DCF0;font-size:11.5px;font-weight:700;padding:8px 16px;border-radius:999px;margin-bottom:22px;transition:.15s;}
+.musicbtn:active{transform:scale(.96);}
+.musicbtn.on{background:rgba(84,164,55,.18);border-color:var(--green);color:#fff;}
+.musicbtn .bars{display:inline-flex;align-items:flex-end;gap:2px;height:11px;}
+.musicbtn .bars i{width:2px;background:var(--green);border-radius:1px;display:block;}
+.musicbtn.on .bars i{animation:bar 0.9s ease-in-out infinite;}
+.musicbtn .bars i:nth-child(1){height:4px;animation-delay:0s;}
+.musicbtn .bars i:nth-child(2){height:9px;animation-delay:.15s;}
+.musicbtn .bars i:nth-child(3){height:6px;animation-delay:.3s;}
+@keyframes bar{0%,100%{transform:scaleY(.4);}50%{transform:scaleY(1);}}
 
 /* SIGNIN */
 .signin{flex:1;display:flex;flex-direction:column;justify-content:center;padding:36px 24px;overflow-y:auto;}
@@ -816,6 +826,42 @@ function addDaysStr(dstr,n){const d=new Date(dstr+'T00:00:00');d.setDate(d.getDa
 let pendAtt=null;
 let pendUPhoto=null;
 let pendCarPhoto=null;
+
+// ===== موسيقى هادئة لشاشة الدخول (Web Audio API — بدون أي ملفات خارجية) =====
+let actx=null,ambientOn=false,ambientNodes=[];
+function toggleAmbient(){ambientOn?stopAmbient():startAmbient();}
+function startAmbient(){
+  try{
+    if(!actx)actx=new(window.AudioContext||window.webkitAudioContext)();
+    if(actx.state==='suspended')actx.resume();
+    const master=actx.createGain();master.gain.setValueAtTime(0.0001,actx.currentTime);
+    master.gain.exponentialRampToValueAtTime(0.045,actx.currentTime+2.5);
+    master.connect(actx.destination);
+    ambientNodes.push(master);
+    // أكورد هادئ (C major add9) بأصوات جراس ناعمة + LFO بطيء يدّي إحساس تنفّس
+    const freqs=[130.81,164.81,196.00,261.63,293.66];
+    freqs.forEach((f,i)=>{
+      const osc=actx.createOscillator();osc.type='sine';osc.frequency.value=f;
+      const g=actx.createGain();g.gain.value=0.20/(i+1);
+      const lfo=actx.createOscillator();lfo.type='sine';lfo.frequency.value=0.07+i*0.013;
+      const lfoGain=actx.createGain();lfoGain.gain.value=g.gain.value*0.4;
+      lfo.connect(lfoGain);lfoGain.connect(g.gain);
+      osc.connect(g);g.connect(master);
+      osc.start();lfo.start();
+      ambientNodes.push(osc,lfo,g,lfoGain);
+    });
+    ambientOn=true;
+  }catch(e){toast('⚠️ تعذّر تشغيل الموسيقى على هذا الجهاز');}
+}
+function stopAmbient(){
+  if(!ambientNodes.length){ambientOn=false;return;}
+  const master=ambientNodes[0];
+  try{if(master&&master.gain)master.gain.exponentialRampToValueAtTime(0.0001,actx.currentTime+0.6);}catch(_){}
+  const nodesToStop=ambientNodes.slice();
+  setTimeout(()=>{nodesToStop.forEach(n=>{try{n.stop&&n.stop();}catch(_){}try{n.disconnect&&n.disconnect();}catch(_){}});},650);
+  ambientNodes=[];
+  ambientOn=false;
+}
 let _actionLock=false;
 let preFetchedLoc=null,preFetchedLocAt=0,_locWarming=false;
 function prewarmLocation(){
@@ -916,9 +962,13 @@ function rSetup(){
 function rWel(){
   return `<div class="welcome">
     <img class="wlogo" src="${LOGO}" alt="IFT">
-    <h1>بضاعة الأمانة</h1>
+    <h1>أهلاً بك 👋</h1>
     <div class="corp">IFT CORPORATION</div>
     <p>نظام متكامل لتتبع بضاعة العملاء في المخزن من الإدخال حتى التسليم</p>
+    <button type="button" class="musicbtn ${ambientOn?'on':''}" data-a="music">
+      <span class="bars"><i></i><i></i><i></i></span>
+      ${ambientOn?'موسيقى هادئة تعمل':'تشغيل موسيقى هادئة'}
+    </button>
     <div class="stages"><span>إدخال</span><span>حسابات</span><span>سيارات</span><span>مخازن</span><span>مندوب</span><span>تسليم</span></div>
     <button class="btn-primary" data-a="go-si">دخول إلى النظام</button>
   </div>`;}
@@ -2420,7 +2470,7 @@ async function onCarPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -2428,7 +2478,8 @@ function onA(e){
     setTimeout(()=>{_actionLock=false;},1500);
   }
   if(a==='theme'){nightMode=!nightMode;localStorage.setItem(NIGHT_KEY,nightMode?'1':'0');_lastBGTab=null;render();}
-  else if(a==='go-si'){S.screen='signin';S.err='';render();}
+  else if(a==='go-si'){stopAmbient();S.screen='signin';S.err='';render();}
+  else if(a==='music'){toggleAmbient();render();}
   else if(a==='cancel'){doCancel(id);}
   else if(a==='custret'){doCustReturn(id);}
   else if(a==='rcvcnt'){doReceiveCounter();}
