@@ -44,6 +44,20 @@ input,select,textarea{font-family:inherit;outline:none;}
 .musicbtn .bars i:nth-child(2){height:9px;animation-delay:.15s;}
 .musicbtn .bars i:nth-child(3){height:6px;animation-delay:.3s;}
 @keyframes bar{0%,100%{transform:scaleY(.4);}50%{transform:scaleY(1);}}
+.greetbar{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(120deg,var(--blue-lg),#fff);border:1px solid var(--blue2);border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:13.5px;font-weight:800;color:var(--blue);}
+.musicmini{width:30px;height:30px;border-radius:50%;background:#fff;border:1.5px solid var(--blue2);font-size:14px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.musicmini.on{background:var(--green-lg);border-color:var(--green);}
+.cntcard{background:#fff;border:1px solid var(--line);border-radius:11px;padding:10px 13px;margin-bottom:8px;cursor:pointer;transition:.12s;}
+.cntcard:active{transform:scale(.985);}
+.cntcard-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
+.cntcard-badge{font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:999px;background:var(--paper);}
+.cntcard-code{font-size:13px;font-weight:800;color:var(--blue);flex:1;}
+.cntcard-cap{font-size:10.5px;font-weight:700;color:var(--muted);background:var(--paper);padding:2px 8px;border-radius:999px;}
+.cntcard-row{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;padding:3px 0;gap:8px;}
+.cntcard-row b{color:var(--ok);font-weight:800;text-align:left;}
+.cntcard-row.muted{color:var(--muted);font-size:10.5px;}
+.repgrp.hide{display:none;}
+#repgrpbar button{font-weight:800;}
 
 /* SIGNIN */
 .signin{flex:1;display:flex;flex-direction:column;justify-content:center;padding:36px 24px;overflow-y:auto;}
@@ -428,6 +442,20 @@ function labsForCustomer(ccode){return DB.labs.filter(l=>l.custCode===ccode);}
 function glb(labCode,icode,batch){return DB.labBalances[bk(labCode,icode,batch)]||0;}
 // رصيد الكونتر: بالمخزن (location='WH') أو عند معمل معيّن (location=labCode)
 function cbal(location,code){return DB.counterBalances[location+'|'+code]||0;}
+// ملخص واضح لحالة الكونتر: مين معاه دلوقتي وآخر حركة ليه — للعرض السريع في القوائم
+function counterSummary(code){
+  const wh=cbal('WH',code);
+  const labHolds=DB.labs.map(l=>({l,qty:cbal(l.code,code)})).filter(x=>x.qty>0);
+  let holderParts=[];
+  if(wh>0)holderParts.push(`📥 بالمخزن (${wh})`);
+  labHolds.forEach(({l,qty})=>holderParts.push(`🏭 ${l.name} (${qty})`));
+  const holderText=holderParts.length?holderParts.join(' + '):'لا يوجد رصيد حالي';
+  const logs=DB.counterLog.filter(x=>x.counterCode===code).sort((a,b)=>(b.at||0)-(a.at||0));
+  const last=logs[0];
+  const locLbl=loc=>loc==='WH'?'المخزن':(DB.labs.find(l=>l.code===loc)?.name||loc);
+  const lastMoveText=last?`${last.reason}${last.locTo?' → '+locLbl(last.locTo):''} · ${new Date(last.at).toLocaleString('ar-EG',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`:'لا توجد حركات مسجّلة بعد';
+  return{holderText,lastMoveText,lastAt:last?last.at:0};
+}
 
 /* ===== تحديد اسم المنطقة من الإحداثيات (لخريطة أكثر المناطق زيارة) ===== */
 const AREA_CACHE=JSON.parse(localStorage.getItem('ift_area_cache')||'{}');
@@ -751,6 +779,7 @@ function findExpiry(cc,ic,batch){
 }
 function fc(code){return DB.customers.find(c=>c.code===code);}
 function fi(code){return DB.items.find(i=>i.code===code);}
+function itemNeedsCounter(icode){const it=fi(icode);return !!(it&&it.needsCounter);}
 function bk(c,i,b){return c+'|'+i+(b&&b.trim()?'|'+b.trim():'');}
 function bkNoB(c,i){return c+'|'+i;}
 function custOpts(sel){return DB.customers.map(c=>`<option value="${c.code}" ${c.code===sel?'selected':''}>${c.code} — ${c.name}</option>`).join('');}
@@ -837,7 +866,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview'};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -858,39 +887,70 @@ let pendAtt=null;
 let pendUPhoto=null;
 let pendCarPhoto=null;
 
-// ===== موسيقى هادئة لشاشة الدخول (Web Audio API — بدون أي ملفات خارجية) =====
-let actx=null,ambientOn=false,ambientNodes=[];
+// ===== موسيقى خلفية هادئة بطابع ساكسفون Smooth Jazz (Web Audio API — بدون أي ملفات خارجية) =====
+// تبدأ فقط بعد تسجيل الدخول (من شاشة الرئيسية)، مش قبلها
+let actx=null,ambientOn=false,ambientNodes=[],ambientMaster=null,saxTimer=null;
 function toggleAmbient(){ambientOn?stopAmbient():startAmbient();}
 function startAmbient(){
   try{
     if(!actx)actx=new(window.AudioContext||window.webkitAudioContext)();
     if(actx.state==='suspended')actx.resume();
     const master=actx.createGain();master.gain.setValueAtTime(0.0001,actx.currentTime);
-    master.gain.exponentialRampToValueAtTime(0.045,actx.currentTime+2.5);
+    master.gain.exponentialRampToValueAtTime(0.035,actx.currentTime+2.5); // مستوى منخفض جدًا وغير مزعج
     master.connect(actx.destination);
+    ambientMaster=master;
     ambientNodes.push(master);
-    // أكورد هادئ (C major add9) بأصوات جراس ناعمة + LFO بطيء يدّي إحساس تنفّس
-    const freqs=[130.81,164.81,196.00,261.63,293.66];
+    // فرش هادئ (باد) تحتي بيدّي إحساس دافئ زي خلفية الجاز الناعم
+    const freqs=[130.81,164.81,196.00,261.63];
     freqs.forEach((f,i)=>{
       const osc=actx.createOscillator();osc.type='sine';osc.frequency.value=f;
-      const g=actx.createGain();g.gain.value=0.20/(i+1);
-      const lfo=actx.createOscillator();lfo.type='sine';lfo.frequency.value=0.07+i*0.013;
-      const lfoGain=actx.createGain();lfoGain.gain.value=g.gain.value*0.4;
+      const g=actx.createGain();g.gain.value=0.16/(i+1);
+      const lfo=actx.createOscillator();lfo.type='sine';lfo.frequency.value=0.06+i*0.012;
+      const lfoGain=actx.createGain();lfoGain.gain.value=g.gain.value*0.35;
       lfo.connect(lfoGain);lfoGain.connect(g.gain);
       osc.connect(g);g.connect(master);
       osc.start();lfo.start();
       ambientNodes.push(osc,lfo,g,lfoGain);
     });
     ambientOn=true;
+    scheduleSaxNote(2200); // أول نغمة ساكسفون بعد شوية من بدء الباد
   }catch(e){toast('⚠️ تعذّر تشغيل الموسيقى على هذا الجهاز');}
 }
+function scheduleSaxNote(delay){
+  clearTimeout(saxTimer);
+  saxTimer=setTimeout(()=>{
+    if(!ambientOn)return;
+    playSaxNote();
+    scheduleSaxNote(3200+Math.random()*3800); // نغمات متباعدة وهادئة زي عزف ساكسفون ناعم في الخلفية
+  },delay);
+}
+function playSaxNote(){
+  if(!actx||!ambientMaster)return;
+  const scale=[261.63,293.66,329.63,392.00,440.00,523.25,392.00,329.63]; // بنتاتونيك دافئة (Smooth Jazz)
+  const freq=scale[Math.floor(Math.random()*scale.length)];
+  const t=actx.currentTime;
+  const dur=1.6+Math.random()*1.3;
+  const osc=actx.createOscillator();osc.type='sawtooth';osc.frequency.setValueAtTime(freq,t);
+  const vibrato=actx.createOscillator();vibrato.type='sine';vibrato.frequency.value=4.3;
+  const vibGain=actx.createGain();vibGain.gain.value=2.5;
+  vibrato.connect(vibGain);vibGain.connect(osc.frequency);
+  const filt=actx.createBiquadFilter();filt.type='lowpass';filt.frequency.value=1050;filt.Q.value=0.6;
+  const g=actx.createGain();g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(0.045,t+0.4); // دخول ناعم زي نفس الساكسفون
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  osc.connect(filt);filt.connect(g);g.connect(ambientMaster);
+  osc.start(t);vibrato.start(t);
+  osc.stop(t+dur+0.15);vibrato.stop(t+dur+0.15);
+  ambientNodes.push(osc,vibrato,vibGain,filt,g);
+}
 function stopAmbient(){
+  clearTimeout(saxTimer);
   if(!ambientNodes.length){ambientOn=false;return;}
-  const master=ambientNodes[0];
+  const master=ambientMaster;
   try{if(master&&master.gain)master.gain.exponentialRampToValueAtTime(0.0001,actx.currentTime+0.6);}catch(_){}
   const nodesToStop=ambientNodes.slice();
   setTimeout(()=>{nodesToStop.forEach(n=>{try{n.stop&&n.stop();}catch(_){}try{n.disconnect&&n.disconnect();}catch(_){}});},650);
-  ambientNodes=[];
+  ambientNodes=[];ambientMaster=null;
   ambientOn=false;
 }
 let _actionLock=false;
@@ -997,10 +1057,6 @@ function rWel(){
     <h1>أهلاً بك 👋</h1>
     <div class="corp">IFT CORPORATION</div>
     <p>نظام متكامل لتتبع بضاعة العملاء في المخزن من الإدخال حتى التسليم</p>
-    <button type="button" class="musicbtn ${ambientOn?'on':''}" data-a="music">
-      <span class="bars"><i></i><i></i><i></i></span>
-      ${ambientOn?'موسيقى هادئة تعمل':'تشغيل موسيقى هادئة'}
-    </button>
     <div class="stages"><span>إدخال</span><span>حسابات</span><span>سيارات</span><span>مخازن</span><span>مندوب</span><span>تسليم</span></div>
     <button class="btn-primary" data-a="go-si">دخول إلى النظام</button>
   </div>`;}
@@ -1245,6 +1301,13 @@ function rCal(listForDots){
   </div>`;
 }
 
+function greetingMsg(){
+  const h=new Date().getHours();
+  const name=(S.user&&S.user.name)?S.user.name.split(' ')[0]:'';
+  const isMorning=h<12;
+  return {txt:`${isMorning?'صباح الخير':'مساء الخير'} يا ${name}`,ic:isMorning?'☀️':'🌙'};
+}
+
 function rHome(){
   const u=S.user;
   if(u.role==='rep')prewarmLocation();
@@ -1275,10 +1338,15 @@ function rHome(){
   const sel=S.calDate||ymd(Date.now());
   if(!S.calAll&&!q&&!(S.hflt&&S.hflt.length))list=list.filter(o=>orderDateStr(o)===sel);
   const chips=groups.filter(c=>c.roles.includes(u.role));
+  const grt=greetingMsg();
   return`
   <div class="stitle">${S.hflt&&S.hflt.length?'مرشّح: '+(S.hfltLabel||''):'الرئيسية'}</div>
   <div class="ssub">${list.length} طلب${S.hflt&&S.hflt.length?` · <span style="color:var(--green);cursor:pointer;" data-a="clf">إلغاء ✕</span>`:''}</div>
   <div class="content">
+    ${(!S.hflt||!S.hflt.length)?`<div class="greetbar">
+      <span>${grt.txt} <span style="font-size:15px;">${grt.ic}</span></span>
+      <button type="button" class="musicmini ${ambientOn?'on':''}" data-a="music" title="موسيقى هادئة">${ambientOn?'🔊':'🔈'}</button>
+    </div>`:''}
     ${rCal(listForDots)}
     <div class="field"><input id="hsi" placeholder="🔎 بحث بالاسم أو التاريخ (مثال: 12/07 أو اسم العميل)..." value="${q.replace(/"/g,'&quot;')}"></div>
     ${chips.length?`<div class="grid${chips.length>2?'3':'2'}" style="margin-bottom:14px;">${chips.map(c=>`<div class="rbox" style="text-align:center;position:relative;" data-a="flt" data-stage="${c.stages.join(',')}" data-label="${c.l}">
@@ -1454,9 +1522,9 @@ function rSubF(){
   ${wt==='amanah'?`
   <div class="row2">
     <div class="field"><label>معمل العميل</label><select name="labCode" id="slab" required><option value="">اكتب كود العميل أولاً...</option></select></div>
-    <div class="field"><label>الكونتر / الدور</label><select name="counterCode" id="scounter">${DB.counters.length?`<option value="">بدون كونتر</option>`+DB.counters.map(c=>`<option value="${c.code}">${cnname(c.code)}</option>`).join(''):'<option value="">لا توجد كونترات مسجّلة</option>'}</select></div>
+    <div class="field" id="scntfield"><label>الكونتر / الدور</label><select name="counterCode" id="scounter">${DB.counters.length?`<option value="">بدون كونتر</option>`+DB.counters.map(c=>`<option value="${c.code}">${cnname(c.code)}</option>`).join(''):'<option value="">لا توجد كونترات مسجّلة</option>'}</select></div>
   </div>
-  <div class="row2">
+  <div class="row2" id="scntwrap2">
     <div class="field"><label>هل يخرج الكونتر مع البضاعة للعميل؟</label><select name="counterWithGoods" id="scwg"><option value="yes">✅ نعم — يسلَّم مع البضاعة</option><option value="no">❌ لا — البضاعة فقط بدون الكونتر</option></select></div>
     <div class="field"><label>عدد الكونترات</label><input name="counterQty" id="scqty" type="number" min="1" value="1"></div>
   </div>`:''}
@@ -1684,7 +1752,14 @@ function rRep(){
   <div class="stitle">التقارير${isAdmin?'':u.role==='rep'?' — تقريري':'  — عملياتي'}</div>
   <div class="ssub">${isAdmin?'جميع الحركات':u.role==='rep'?'أوردرات التسليم الخاصة بك':'حركاتي وعملائي فقط'} · ${list.length} طلب</div>
   <div class="content">
+    <div class="pillbar" id="repgrpbar">
+      <button type="button" data-a="repgrp" data-g="overview" class="${(S.repGrp||'overview')==='overview'?'on':''}">📊 نظرة عامة</button>
+      <button type="button" data-a="repgrp" data-g="balances" class="${(S.repGrp||'overview')==='balances'?'on':''}">💰 الأرصدة</button>
+      <button type="button" data-a="repgrp" data-g="counters" class="${(S.repGrp||'overview')==='counters'?'on':''}">🎫 الكونترات والنتروجين</button>
+      <button type="button" data-a="repgrp" data-g="reps" class="${(S.repGrp||'overview')==='reps'?'on':''}">🧍 المندوبين والتوصيل</button>
+    </div>
     ${isAdmin?`
+    <div class="repgrp ${(S.repGrp||'overview')==='overview'?'':'hide'}">
     <div class="slabel">🧍 أوردرات لا تزال مع المندوبين</div>
     <div class="card">
       ${(()=>{
@@ -1767,6 +1842,7 @@ function rRep(){
       ${[['today','اليوم'],['week','أسبوع'],['month','شهر'],['all','الكل']].map(([v,l])=>`<button data-a="rrng" data-rng="${v}" class="${rng===v?'on':''}">${l}</button>`).join('')}
     </div>
     ${(u.role==='rep'||isAdmin)?`
+    </div><div class="repgrp ${(S.repGrp||'overview')==='reps'?'':'hide'}">
     <div class="slabel">📋 تقارير المندوبين</div>
     ${(()=>{
       // اجمع أسماء كل المندوبين
@@ -1814,7 +1890,8 @@ function rRep(){
         </div>`;
       }).join('');
     })()}
-    `:''}
+    </div>`:''}
+    <div class="repgrp ${(S.repGrp||'overview')==='overview'?'':'hide'}">
     <div class="grid3">
       <div class="rbox" style="text-align:center;"><div class="big">${list.length}</div><div class="lab">إجمالي</div></div>
       <div class="rbox" style="text-align:center;"><div class="big" style="color:var(--ok)">${done.length}</div><div class="lab">مكتملة</div></div>
@@ -1828,6 +1905,7 @@ function rRep(){
     <div class="grid2" style="margin-top:8px;">
       <div class="rbox" style="text-align:center;"><div class="big" style="color:var(--warn)">${regOrders.length}</div><div class="lab">🧾 أوردر عادي (SMS) — كمية: ${qReg}</div></div>
     </div>
+    </div><div class="repgrp ${(S.repGrp||'overview')==='balances'?'':'hide'}">
     ${regOrders.length?`<div class="slabel">🧾 تقرير الأوردرات العادية (SMS)</div>
     <div class="card">
       ${regOrders.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0,20).map(o=>`<div class="kv" style="cursor:pointer;" data-a="open" data-id="${o.id}">
@@ -1841,6 +1919,7 @@ function rRep(){
       <button class="bs bghost" data-a="pdf">🖨️ طباعة PDF</button>
     </div>
 
+    </div><div class="repgrp ${(S.repGrp||'overview')==='overview'?'':'hide'}">
     <div class="slabel">⚠️ منتجات قريبة الانتهاء (30 يوم)</div>
     ${expItems.filter(o=>o.dl<=30).length===0
       ?`<div class="card" style="text-align:center;color:var(--ok);font-weight:700;">✓ لا توجد منتجات قريبة الانتهاء</div>`
@@ -1851,6 +1930,7 @@ function rRep(){
           <div class="kv"><span>الانتهاء</span><b class="${o.dl<0?'eb':o.dl<=7?'ew':'eo'}">${o.expiry}</b></div>
         </div>`).join('')}
 
+    </div><div class="repgrp ${(S.repGrp||'overview')==='balances'?'':'hide'}">
     <div class="slabel">📥 أمانة المخزن (قبل الصرف)${isAdmin?'':' (عملائي فقط)'}</div>
     <div style="overflow-x:auto;"><table class="rep">
       <thead><tr><th>العميل</th><th>الصنف</th><th>القطاع</th><th>التشغيلة</th><th>الصلاحية</th><th>الرصيد بالمخزن</th></tr></thead>
@@ -1880,6 +1960,7 @@ function rRep(){
       })()}</tbody>
     </table></div>
 
+    </div><div class="repgrp ${(S.repGrp||'overview')==='counters'?'':'hide'}">
     ${isAdmin?`<div class="slabel">📦 الكونترات</div>
     <div class="card">
       <div class="brow" style="margin-bottom:10px;">
@@ -1887,7 +1968,15 @@ function rRep(){
       </div>
       <button class="bs" data-a="labcnt" type="button" style="width:100%;background:var(--blue);color:#fff;margin-bottom:10px;">📡 فتح شاشة متابعة الكونترات داخل المعامل</button>
       ${DB.counters.length===0?`<div style="text-align:center;color:var(--muted);font-size:12px;">لا توجد كونترات مسجّلة — أضيفي من الإدارة</div>`:
-      DB.counters.map(c=>`<div class="kv" style="cursor:pointer;" data-a="cntlog" data-cnt="${c.code}"><span>${c.status==='ممتلئ'?'🟢':'🔴'} 🎫 ${c.code} ${c.name?'— '+c.name:''}</span><b style="color:var(--ok);">📥 بالمخزن: ${cbal('WH',c.code)}</b></div>`).join('')}
+      DB.counters.map(c=>{const cs=counterSummary(c.code);return`<div class="cntcard" data-a="cntlog" data-cnt="${c.code}">
+        <div class="cntcard-top">
+          <span class="cntcard-badge">${c.status==='ممتلئ'?'🟢 ممتلئ':'🔴 فارغ'}</span>
+          <span class="cntcard-code">🎫 ${c.code}${c.name?' — '+c.name:''}</span>
+          <span class="cntcard-cap">${ccap(c.code)}</span>
+        </div>
+        <div class="cntcard-row"><span>الموجود حاليًا مع</span><b>${cs.holderText}</b></div>
+        <div class="cntcard-row muted"><span>آخر حركة</span><span>${cs.lastMoveText}</span></div>
+      </div>`;}).join('')}
     </div>
 
     <div class="slabel">↩️ استرجاع كونتر من معمل</div>
@@ -1957,7 +2046,7 @@ function rRep(){
       delivered.forEach(o=>{const area=AREA_CACHE[o.dloc]||'جارِ التحديد...';counts[area]=(counts[area]||0)+1;});
       const ranked=Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8);
       const max=ranked.length?ranked[0][1]:1;
-      return `<div class="slabel">🗺️ أكثر مناطق مصر زيارة للتسليم</div>
+      return `</div><div class="repgrp ${(S.repGrp||'overview')==='reps'?'':'hide'}"><div class="slabel">🗺️ أكثر مناطق مصر زيارة للتسليم</div>
       ${missing>0?`<div style="background:var(--warn-bg);color:var(--warn);border-radius:9px;padding:9px 12px;font-size:11.5px;font-weight:700;margin-bottom:10px;">⚠️ ${missing} عملية تسليم بدون موقع مسجّل — تأكد إن صلاحية الموقع مفعّلة للمتصفح من إعدادات الهاتف عشان تتحسب في هذا التقرير.</div>`:''}
       ${ranked.length===0?`<div class="card" style="text-align:center;color:var(--muted);font-size:12px;padding:20px;">لا توجد مواقع تسليم مسجّلة بعد</div>`:
       `<div class="card">
@@ -1991,6 +2080,7 @@ function rRep(){
             :'لم يُسجَّل الموقع'}</b></div>
         </div>`).join('')}
 
+    </div><div class="repgrp ${(S.repGrp||'overview')==='overview'?'':'hide'}">
     <div class="slabel">كافة الحركات (${list.length})</div>
     <div style="overflow-x:auto;"><table class="rep" id="rptbl">
       <thead><tr><th>التاريخ</th><th>النوع</th><th>SO</th><th>العميل</th><th>الصنف</th><th>الكمية</th><th>الحالة</th><th>بواسطة</th></tr></thead>
@@ -2002,6 +2092,7 @@ function rRep(){
         return`<tr><td>${d}</td><td>${kl}</td><td>${o.inv||'-'}</td><td>${o.cname||o.fcname||o.ccode||'-'}</td><td>${o.iname||o.icode||'-'}</td><td>${o.qty||'-'}</td><td style="color:${sc};font-weight:700;">${stageLabel(o)}</td><td>${o.cbyn||'-'}</td></tr>`;
       }).join('')}</tbody>
     </table></div>
+    </div>
   </div>`;}
 
 function rOrd(){
@@ -2304,7 +2395,34 @@ function rAdm(){return`
       <button class="btn-primary" type="submit">إضافة المستخدم</button>
     </form>
     <div class="slabel">المستخدمون (${DB.users.length})</div>
-    ${DB.users.map(u=>`<div class="urow"><div style="display:flex;align-items:center;gap:9px;">${u.photo?`<img src="${u.photo}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1.5px solid var(--line);">`:`<div style="width:34px;height:34px;border-radius:50%;background:var(--blue-lg);color:var(--blue2);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;">${(u.name||'?')[0]}</div>`}<div><div style="font-weight:800;font-size:13px;">${u.name}</div><div style="font-size:11px;color:var(--muted);">${u.username} · ${RLBL[u.role]}</div></div></div><div class="sw ${u.active?'on':''}" data-a="tog" data-un="${u.username}"></div></div>`).join('')}
+    ${DB.users.map(u=>{
+      const editing=S.editUn===u.username;
+      return `<div class="urow" style="flex-direction:column;align-items:stretch;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div style="display:flex;align-items:center;gap:9px;cursor:pointer;" data-a="edituser" data-un="${u.username}">
+            ${u.photo?`<img src="${u.photo}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1.5px solid var(--line);">`:`<div style="width:34px;height:34px;border-radius:50%;background:var(--blue-lg);color:var(--blue2);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;">${(u.name||'?')[0]}</div>`}
+            <div><div style="font-weight:800;font-size:13px;">${u.name} ${!u.active?'<span style="color:var(--bad);font-size:10px;">(موقوف)</span>':''}</div><div style="font-size:11px;color:var(--muted);">${u.username} · ${RLBL[u.role]}</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:16px;color:var(--muted);" data-a="edituser" data-un="${u.username}">${editing?'✕':'✏️'}</span>
+            <div class="sw ${u.active?'on':''}" data-a="tog" data-un="${u.username}"></div>
+          </div>
+        </div>
+        ${editing?`<form id="euf" data-un="${u.username}" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;">
+          <div class="row2">
+            <div class="field"><label>الاسم الكامل</label><input name="name" value="${u.name||''}" required></div>
+            <div class="field"><label>اسم المستخدم</label><input name="un" value="${u.username||''}" required></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>كلمة مرور جديدة (اتركها فاضية للإبقاء الحالية)</label><input name="pw" placeholder="•••••••"></div>
+            <div class="field"><label>الدور / الصلاحية</label><select name="role"><option value="data_entry" ${u.role==='data_entry'?'selected':''}>مدخل بيانات</option><option value="accounts" ${u.role==='accounts'?'selected':''}>حسابات العملاء</option><option value="cars" ${u.role==='cars'?'selected':''}>السيارات</option><option value="warehouse" ${u.role==='warehouse'?'selected':''}>المخازن</option><option value="rep" ${u.role==='rep'?'selected':''}>مندوب توزيع</option><option value="quality" ${u.role==='quality'?'selected':''}>إدارة الجودة</option><option value="admin" ${u.role==='admin'?'selected':''}>مدير النظام</option></select></div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn-primary" type="submit" style="flex:1;">💾 حفظ التعديلات</button>
+            <button class="bs bghost" type="button" data-a="edituser" data-un="${u.username}" style="flex:0 0 auto;">إلغاء</button>
+          </div>
+        </form>`:''}
+      </div>`;}).join('')}
     <div class="slabel">إضافة عميل / معمل</div>
     <form id="acf"><div class="row2"><div class="field"><label>الكود</label><input name="code" required></div><div class="field"><label>الاسم</label><input name="name" required></div></div><button class="btn-primary" type="submit">إضافة</button></form>
     <div class="slabel">العملاء (${DB.customers.length})</div>
@@ -2318,6 +2436,7 @@ function rAdm(){return`
       <div class="row2"><div class="field"><label>الوحدة</label><input name="unit" placeholder="علبة / كيس / أمبول ..."></div>
         <div class="field"><label>القطاع</label><select name="sector" required>${DB.sectors.length?DB.sectors.map(s=>`<option value="${s.code}">${s.name}</option>`).join(''):'<option value="">أضف قطاعاً أولاً</option>'}</select></div>
       </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--blue2);margin:4px 0 12px;"><input type="checkbox" name="needsCounter" style="width:16px;height:16px;"> 🎫 هذا الصنف يحتاج كونتر (نيتروجين) عند الصرف/التحويل</label>
       <button class="btn-primary" type="submit">إضافة</button></form>
     <div class="slabel">الأصناف (${DB.items.length})</div>
     ${DB.items.map(i=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${i.code}${i.sector?' · '+sname(i.sector):''}</span><b>${i.name} ${i.unit?'('+i.unit+')':''}</b></div>`).join('')}
@@ -2340,7 +2459,16 @@ function rAdm(){return`
       <button class="btn-primary" type="submit">إضافة الكونتر</button>
     </form>
     <div class="slabel">الكونترات (${DB.counters.length})</div>
-    ${DB.counters.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;cursor:pointer;" data-a="cntlog" data-cnt="${c.code}"><span>${(c.status==='ممتلئ')?'🟢':'🔴'} 🎫 ${c.code} ${c.name?'· '+c.name:''} <span style="color:var(--muted);font-size:10px;">(${ccap(c.code)})</span></span><b>👤 ${u2n(c.owner)||'بدون مسؤول'}</b></div>`).join('')}
+    ${DB.counters.map(c=>{const cs=counterSummary(c.code);return`<div class="cntcard" data-a="cntlog" data-cnt="${c.code}">
+      <div class="cntcard-top">
+        <span class="cntcard-badge">${c.status==='ممتلئ'?'🟢 ممتلئ':'🔴 فارغ'}</span>
+        <span class="cntcard-code">🎫 ${c.code}${c.name?' · '+c.name:''}</span>
+        <span class="cntcard-cap">${ccap(c.code)}</span>
+      </div>
+      <div class="cntcard-row"><span>الموجود حاليًا مع</span><b>${cs.holderText}</b></div>
+      <div class="cntcard-row muted"><span>آخر حركة</span><span>${cs.lastMoveText}</span></div>
+      <div class="cntcard-row muted"><span>المسؤول</span><span>👤 ${u2n(c.owner)||'بدون مسؤول'}</span></div>
+    </div>`;}).join('')}
     <div class="slabel">تعديل سعة كونتر (مدير النظام فقط)</div>
     <button class="bs bghost" style="width:100%;" data-a="editcap" type="button">✏️ تعديل سعة كونتر موجود</button>
     <div class="slabel">🚗 إضافة سيارة</div>
@@ -2381,7 +2509,7 @@ function bind(){
       }
     });
   };
-  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);f('acarf',onACar);
+  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);f('acarf',onACar);f('euf',onEU);
   const rnSelEl=document.getElementById('rnSel');
   if(rnSelEl)rnSelEl.addEventListener('change',()=>{const ot=document.getElementById('rnOther');if(ot)ot.style.display=rnSelEl.value==='__other__'?'block':'none';});
   const cnSelEl=document.getElementById('cnSel');
@@ -2421,6 +2549,12 @@ function bbl(){
     const bv=(batchEl||{}).value?.trim()||'';
     const qty=+(document.getElementById('sqty')||{}).value||0;
     updateLabOptions(cc);
+    // إظهار/إخفاء حقول الكونتر تلقائيًا: تظهر بس لو الصنف المختار محدد عليه إنه يحتاج كونتر
+    const cntField=document.getElementById('scntfield'),cntWrap2=document.getElementById('scntwrap2');
+    const needsC=itemNeedsCounter(ic);
+    if(cntField)cntField.style.display=needsC?'':'none';
+    if(cntWrap2)cntWrap2.style.display=needsC?'':'none';
+    if(!needsC){const cSel=document.getElementById('scounter');if(cSel)cSel.value='';}
     if(!cc||!ic){box.textContent='أدخل كود العميل والصنف لعرض الرصيد المتاح حالياً';box.className='balbox';return;}
     if(u.role==='data_entry'){
       const hasAdded=DB.orders.some(o=>o.kind==='addition'&&o.cby===u.username&&o.ccode===cc&&o.icode===ic&&o.stage!=='rejected');
@@ -2558,7 +2692,7 @@ async function onCarPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -2566,7 +2700,7 @@ function onA(e){
     setTimeout(()=>{_actionLock=false;},1500);
   }
   if(a==='theme'){nightMode=!nightMode;localStorage.setItem(NIGHT_KEY,nightMode?'1':'0');_lastBGTab=null;render();}
-  else if(a==='go-si'){stopAmbient();S.screen='signin';S.err='';render();}
+  else if(a==='go-si'){S.screen='signin';S.err='';render();}
   else if(a==='music'){toggleAmbient();render();}
   else if(a==='printrep'){S.printRep=el.dataset.rep;render();}
   else if(a==='back-manifest'){S.printRep=null;render();}
@@ -2581,7 +2715,7 @@ function onA(e){
   else if(a==='editcap'){doEditCapacity();}
   else if(a==='cntlog'){S.cntLogCode=el.dataset.cnt;S.tab='cntlog';render();}
   else if(a==='qc'){doQC(id);}
-  else if(a==='logout'){S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
+  else if(a==='logout'){stopAmbient();S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
   else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;render();}
   else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;render();}
   else if(a==='wtype'){S.wtype=el.dataset.wt;render();}
@@ -2601,6 +2735,8 @@ function onA(e){
   else if(a==='repret'){doRepRet(id);}
   else if(a==='rdlv'){doRDlv(id);}
   else if(a==='tog'){doTog(el.dataset.un);}
+  else if(a==='edituser'){S.editUn=(S.editUn===el.dataset.un)?null:el.dataset.un;render();}
+  else if(a==='repgrp'){S.repGrp=el.dataset.g;render();}
   else if(a==='xls'){doXLS();}
   else if(a==='xlslabcnt'){doXLSLabCounters();}
   else if(a==='pdf'){window.print();}
@@ -3010,6 +3146,22 @@ async function doTog(un){
   u.active=!u.active;await svu();render();
 }
 
+async function onEU(e){
+  e.preventDefault();
+  const oldUn=e.target.dataset.un;
+  const u=DB.users.find(x=>x.username===oldUn);if(!u)return;
+  const f=new FormData(e.target);
+  const newUn=(f.get('un')||'').trim(),name=(f.get('name')||'').trim(),role=f.get('role'),pw=(f.get('pw')||'').trim();
+  if(!newUn||!name){toast('⛔ الاسم واسم المستخدم مطلوبين');return;}
+  if(newUn!==oldUn&&DB.users.some(x=>x.username===newUn)){toast('⛔ اسم المستخدم ده مستخدم بالفعل');return;}
+  if(oldUn===S.user.username&&role!=='admin'&&u.role==='admin'){toast('⛔ لا يمكنك سحب صلاحية المدير من حسابك الحالي');return;}
+  u.username=newUn;u.name=name;u.role=role;
+  if(pw)u.password=pw;
+  await svu();
+  if(S.user&&S.user.username===oldUn)S.user=u; // لو المدير كان بيعدّل حسابه هو نفسه
+  S.editUn=null;toast('✅ تم حفظ تعديلات المستخدم');render();
+}
+
 async function onAU(e){
   e.preventDefault();const f=new FormData(e.target);const un=f.get('un').trim();
   if(DB.users.some(u=>u.username===un)){toast('اسم المستخدم موجود مسبقًا');return;}
@@ -3037,7 +3189,7 @@ async function onAC(e){
 async function onAI(e){
   e.preventDefault();const f=new FormData(e.target);const code=f.get('code').trim();
   if(DB.items.some(i=>i.code===code)){toast('الكود مستخدم');return;}
-  DB.items.push({code,name:f.get('name'),unit:f.get('unit')||'',sector:f.get('sector')||''});await svi();toast('تم إضافة الصنف');e.target.reset();render();
+  DB.items.push({code,name:f.get('name'),unit:f.get('unit')||'',sector:f.get('sector')||'',needsCounter:!!f.get('needsCounter')});await svi();toast('تم إضافة الصنف');e.target.reset();render();
 }
 
 async function onAS(e){
