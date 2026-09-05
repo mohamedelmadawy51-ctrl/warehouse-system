@@ -206,6 +206,16 @@ table.rep th{color:var(--muted);font-weight:800;font-size:10px;background:var(--
 @keyframes prog{0%{width:0%;}100%{width:100%;}}
 
 @media(min-width:640px){#app{box-shadow:0 0 40px rgba(11,56,102,.12);}}
+/* ===== تحسين العرض على اللابتوب/الشاشات الكبيرة — بدل ما التطبيق يفضل بعرض موبايل ثابت وسط شاشة فاضية ===== */
+@media(min-width:900px){
+  #app{max-width:900px;}
+  .grid2,.grid3{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
+  .row2{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));}
+  .content{padding:8px 26px 24px;}
+}
+@media(min-width:1200px){
+  #app{max-width:1080px;}
+}
 @media print{.tabbar,.topbar,.brow,.pillbar,button,[data-a]{display:none!important;}body{background:#fff;}.content{padding:0;}.card{box-shadow:none;border:1px solid #ddd;page-break-inside:avoid;}}
 @media print{html,body{height:auto!important;overflow:visible!important;}#app{max-width:100%!important;height:auto!important;overflow:visible!important;}}
 .no-print{}
