@@ -926,6 +926,188 @@ let pendAtt=null;
 let pendUPhoto=null;
 let pendCarPhoto=null;
 
+// ===== استيراد ملف اكسيل خارجي (الأذن المجمع للمندوب) — طريقة صرف رابعة =====
+const XLS_IMPORT_FIELDS=[
+  {key:'rep',label:'اسم المندوب',required:true,aliases:['المندوب','مندوب','اسم المندوب','السائق','مندوب التوزيع']},
+  {key:'carNo',label:'رقم السيارة',required:false,aliases:['رقم السيارة','السيارة','رقم العربية','عربية']},
+  {key:'soNo',label:'رقم الإذن',required:false,aliases:['الاذن','الإذن','رقم الاذن','رقم الإذن','رقم الامر','رقم الأمر']},
+  {key:'ccode',label:'كود العميل',required:true,aliases:['كود العميل','كود','الكود']},
+  {key:'cname',label:'اسم العميل',required:true,aliases:['اسم العميل','العميل']},
+  {key:'sector',label:'القطاع',required:false,aliases:['قطاع','القطاع','المنطقة']},
+  {key:'priceCat',label:'فئة البيع',required:false,aliases:['فئة البيع','البيع','قطاع البيع']},
+  {key:'icode',label:'كود الصنف',required:true,aliases:['الصنف','كود الصنف']},
+  {key:'iname',label:'اسم الصنف',required:true,aliases:['اسم الصنف2','اسم الصنف','اسم المنتج','الصنف2']},
+  {key:'batch',label:'التشغيلة',required:false,aliases:['الشغيلة','كود الشغيلة','تشغيلة','التشغيلة']},
+  {key:'expiry',label:'تاريخ الصلاحية',required:false,aliases:['الصلاحية','تاريخ الانتهاء','تاريخ الصلاحية']},
+  {key:'qty',label:'الكمية',required:true,aliases:['كمية','الكمية']},
+  {key:'unit',label:'الوحدة',required:false,aliases:['وحدة','الوحدة']},
+  {key:'note',label:'ملاحظات',required:false,aliases:['ملاحظات','ملحوظة','ملاحظة']},
+  {key:'outDate',label:'تاريخ الخروج',required:false,aliases:['الخروج','تاريخ الخروج']},
+  {key:'retDate',label:'تاريخ العودة',required:false,aliases:['العودة','تاريخ العودة']},
+];
+let xlsImp=null; // {fileName,headers,rawRows,mapping,repMap,step,parsedRows}
+function xh(s){return (s||'').toString().trim().replace(/\s+/g,' ');}
+function xlsAutoMatch(headers){
+  const map={};
+  XLS_IMPORT_FIELDS.forEach(fd=>{
+    let idx=headers.findIndex(h=>fd.aliases.some(al=>xh(h)===xh(al)));
+    if(idx<0)idx=headers.findIndex(h=>xh(h)&&fd.aliases.some(al=>xh(h).includes(xh(al))||xh(al).includes(xh(h))));
+    map[fd.key]=idx;
+  });
+  return map;
+}
+function parseFlexDate(v){
+  if(v==null||v==='')return '';
+  if(v instanceof Date&&!isNaN(v))return ymd(v);
+  const s=String(v).trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
+  const m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if(m){
+    let day=+m[1],month=+m[2],y=m[3];if(y.length===2)y='20'+y;
+    if(day>12&&month<=12){/* يوم/شهر صحيحة */}
+    else if(month>12&&day<=12){const t=day;day=month;month=t;}
+    const dt=new Date(+y,month-1,day);
+    if(!isNaN(dt))return ymd(dt);
+  }
+  const dt2=new Date(s);
+  if(!isNaN(dt2))return ymd(dt2);
+  return s;
+}
+async function onXlsFile(e){
+  const file=e.target.files[0];if(!file)return;
+  if(typeof XLSX==='undefined'){toast('⏳ جارِ تحميل مكتبة Excel — حاول تاني بعد لحظة');return;}
+  try{
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array',cellDates:true});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''});
+    const headers=(rows[0]||[]).map(h=>xh(h));
+    const dataRows=rows.slice(1).filter(r=>r.some(c=>xh(c)!==''));
+    if(!headers.length||!dataRows.length){toast('⚠️ الملف فارغ أو لا يحتوي على بيانات');return;}
+    xlsImp={fileName:file.name,headers,rawRows:dataRows,mapping:xlsAutoMatch(headers),repMap:{},step:'map',parsedRows:null};
+    render();
+  }catch(err){toast('⛔ تعذّرت قراءة الملف — تأكد أنه ملف Excel صحيح (.xlsx / .xls / .csv)');}
+}
+function xlsContinueToPreview(){
+  if(!xlsImp)return;
+  const missing=XLS_IMPORT_FIELDS.filter(fd=>fd.required&&(xlsImp.mapping[fd.key]==null||xlsImp.mapping[fd.key]<0));
+  if(missing.length){toast('⛔ الرجاء تحديد عمود لكل من: '+missing.map(f=>f.label).join('، '));return;}
+  const g=(row,key)=>{const idx=xlsImp.mapping[key];return (idx==null||idx<0)?'':xh(row[idx]);};
+  const parsed=xlsImp.rawRows.map(row=>({
+    rep:g(row,'rep'),carNo:g(row,'carNo'),soNo:g(row,'soNo'),
+    ccode:g(row,'ccode'),cname:g(row,'cname'),sector:g(row,'sector'),priceCat:g(row,'priceCat'),
+    icode:g(row,'icode'),iname:g(row,'iname'),batch:g(row,'batch'),
+    expiry:parseFlexDate(g(row,'expiry')),qty:+g(row,'qty')||0,unit:g(row,'unit'),
+    note:g(row,'note'),outDate:parseFlexDate(g(row,'outDate')),retDate:parseFlexDate(g(row,'retDate'))
+  })).filter(r=>r.ccode||r.icode||r.rep);
+  if(!parsed.length){toast('⚠️ لم يتم العثور على صفوف بيانات صالحة بعد المطابقة');return;}
+  const repUsers=DB.users.filter(u=>u.role==='rep');
+  const repMap={};
+  [...new Set(parsed.map(r=>r.rep).filter(Boolean))].forEach(rn=>{
+    const hit=repUsers.find(u=>xh(u.name)===xh(rn)||xh(u.username)===xh(rn));
+    repMap[rn]=hit?hit.username:'';
+  });
+  xlsImp.repMap=repMap;xlsImp.parsedRows=parsed;xlsImp.step='preview';render();
+}
+async function xlsConfirmImport(){
+  if(!xlsImp||!xlsImp.parsedRows)return;
+  const u=S.user;
+  const unresolved=Object.entries(xlsImp.repMap).filter(([,v])=>!v);
+  if(unresolved.length){toast('⛔ برجاء تحديد حساب المندوب المسجّل مقابل: '+unresolved.map(([k])=>k).join('، '));return;}
+  let added=0,dup=0,invalid=0;
+  xlsImp.parsedRows.forEach(row=>{
+    if(!row.ccode||!row.icode||!row.qty||row.qty<=0){invalid++;return;}
+    const key=(row.soNo||'')+'|'+row.icode+'|'+(row.batch||'')+'|'+row.ccode+'|'+row.qty;
+    if(DB.orders.some(o=>o.xlsImportKey===key)){dup++;return;}
+    const repUser=DB.users.find(x=>x.username===xlsImp.repMap[row.rep]);
+    const custRec=fc(row.ccode),itemRec=fi(row.icode);
+    const sectorRec=DB.sectors.find(s=>xh(s.name)===xh(row.sector));
+    const o={
+      id:uid('o'),kind:'withdrawal',orderType:'excel',stage:'with_rep',
+      cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
+      repReceivedAt:Date.now(),repReceivedBy:repUser?repUser.name:row.rep,
+      schedDate:row.outDate||ymd(Date.now()),
+      inv:row.soNo||'',
+      ccode:row.ccode,cname:(custRec&&custRec.name)||row.cname||'',
+      icode:row.icode,iname:(itemRec&&itemRec.name)||row.iname||'',
+      batch:row.batch||'',expiry:row.expiry||'',
+      qty:row.qty,unit:row.unit||'',
+      note:row.note||'',
+      sector:sectorRec?sectorRec.code:'',sectorName:sectorRec?sectorRec.name:(row.sector||''),
+      priceCat:row.priceCat||'',
+      repName:repUser?repUser.name:row.rep,carNo:row.carNo||'',
+      retDate:row.retDate||'',
+      xlsImportKey:key,xlsImportedAt:Date.now(),xlsImportedBy:u.username,xlsFileName:xlsImp.fileName
+    };
+    DB.orders.push(o);added++;
+  });
+  if(added>0)await svo();
+  toast(`✅ تم استيراد ${added} صنف إلى الأذن المجمع`+(dup?` — تخطي ${dup} مكرر`:'')+(invalid?` — تجاهل ${invalid} صف غير مكتمل`:''));
+  xlsImp=null;S.tab='home';S.oid=null;render();
+}
+function rXlsImport(){
+  if(!xlsImp){
+    return `
+    <div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;">
+      ℹ️ ارفع ملف إكسيل "كشف التوزيع / الأذن المجمع" — سيتم إنشاء أوردر صرف لكل صف مباشرة تحت اسم المندوب المطابق، ويظهر فوراً في صفحته كـ "مع المندوب" بدون المرور بمراحل الحسابات/السيارات/المخازن (لأن البيانات جاهزة ومعتمدة من الملف). التسليم بعد كده بيتم من نفس شاشة التسليم المعتادة، وتسمح بتسليم الكمية بالكامل أو جزء منها فقط، مع فتح حركة مرتجع تلقائية للباقي بنفس الطريقة المعمول بها حالياً.
+    </div>
+    <label class="attachbtn" for="xlsFileInput">📎 اختيار ملف Excel</label>
+    <input type="file" id="xlsFileInput" accept=".xlsx,.xls,.csv" style="display:none;">`;
+  }
+  if(xlsImp.step==='map'){
+    return `
+    <div class="slabel">🗂️ مطابقة الأعمدة — ${xlsImp.fileName} (${xlsImp.rawRows.length} صف)</div>
+    ${XLS_IMPORT_FIELDS.map(fd=>`
+      <div class="field">
+        <label>${fd.label}${fd.required?' <span style="color:var(--bad)">*</span>':''}</label>
+        <select data-xlsmap="${fd.key}">
+          <option value="-1">— لا يوجد —</option>
+          ${xlsImp.headers.map((h,i)=>`<option value="${i}" ${xlsImp.mapping[fd.key]===i?'selected':''}>${h||('(عمود '+(i+1)+')')}</option>`).join('')}
+        </select>
+      </div>`).join('')}
+    <div class="brow" style="margin-top:10px;">
+      <button type="button" class="bs bghost" data-a="xls-cancel">✖ إلغاء</button>
+      <button type="button" class="bs bgreen" data-a="xls-continue">متابعة ومعاينة البيانات ▶</button>
+    </div>`;
+  }
+  if(xlsImp.step==='preview'){
+    const rows=xlsImp.parsedRows;
+    const repNames=[...new Set(rows.map(r=>r.rep).filter(Boolean))];
+    const repUsers=DB.users.filter(u=>u.role==='rep');
+    return `
+    <div class="slabel">🧍 مطابقة أسماء المناديب بحسابات مسجّلة</div>
+    ${repNames.map(rn=>`
+      <div class="field">
+        <label>"${rn}" في الملف يقابله في النظام:</label>
+        <select data-repmap="${rn}">
+          <option value="">— اختر حساب المندوب —</option>
+          ${repUsers.map(u=>`<option value="${u.username}" ${xlsImp.repMap[rn]===u.username?'selected':''}>${u.name}</option>`).join('')}
+        </select>
+      </div>`).join('')}
+    ${!repUsers.length?`<div class="balbox balbad">⛔ لا يوجد حسابات مناديب مسجّلة بالنظام — أضِف حساب مندوب من الإدارة أولاً</div>`:''}
+    <div class="slabel" style="margin-top:12px;">👁️ معاينة (${rows.length} صف)</div>
+    <div style="overflow-x:auto;">
+    <table class="mtbl" style="font-size:11px;">
+      <thead><tr><th>الإذن</th><th>العميل</th><th>الصنف</th><th>التشغيلة</th><th>الكمية</th><th>الوحدة</th><th>المندوب</th><th>العربية</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr>
+        <td>${r.soNo||'-'}</td>
+        <td>${r.ccode||'-'} — ${r.cname||'-'}</td>
+        <td>${r.icode||'-'} — ${r.iname||'-'}</td>
+        <td>${r.batch||'-'}</td>
+        <td style="font-weight:800;">${r.qty||0}</td>
+        <td>${r.unit||'-'}</td>
+        <td>${r.rep||'-'}</td>
+        <td>${r.carNo||'-'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="brow" style="margin-top:10px;">
+      <button type="button" class="bs bghost" data-a="xls-back">◀ رجوع لمطابقة الأعمدة</button>
+      <button type="button" class="bs bgreen" data-a="xls-confirm">✅ تأكيد الاستيراد إلى الأذن المجمع</button>
+    </div>`;
+  }
+  return '';
+}
+
 // ===== موسيقى خلفية هادئة بطابع ساكسفون Smooth Jazz (Web Audio API — بدون أي ملفات خارجية) =====
 // تبدأ فقط بعد تسجيل الدخول (من شاشة الرئيسية)، مش قبلها
 let actx=null,ambientOn=false,ambientNodes=[],ambientMaster=null,saxTimer=null;
@@ -1265,7 +1447,7 @@ function otitle(o){
 
 function rCard(o){
   const tc=o.kind==='addition'?'ta':o.kind==='withdrawal'?'tw':(o.kind==='return'||o.kind==='customer_return')?'tw':'tt';
-  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي':'صرف'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
+  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي':o.orderType==='excel'?'أذن مجمع':'صرف'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
   const sc=o.stage==='rejected'?'var(--bad)':(o.stage==='delivered'||o.stage==='approved'||o.stage==='returned'||o.stage==='customer_returned')?'var(--ok)':'var(--warn)';
   return `<div class="card" data-a="open" data-id="${o.id}">
     <div class="ch"><div><div class="ctitle">${otitle(o)}</div><div class="cmeta">${o.inv?'SO: '+o.inv+' · ':''}${o.cname||o.fcname||''}</div></div><span class="tag ${tc}">${tt}</span></div>
@@ -1408,8 +1590,11 @@ function rNew(){const t=S.ntype;return`
       <button data-a="stype" data-type="addition" class="${t==='addition'?'on':''}">إضافة أمانة</button>
       <button data-a="stype" data-type="withdrawal" class="${t==='withdrawal'?'on':''}">صرف للعميل</button>
       <button data-a="stype" data-type="consumption" class="${t==='consumption'?'on':''}">استهلاك بالمعمل</button>
+      <button data-a="stype" data-type="excel_import" class="${t==='excel_import'?'on':''}">📥 استيراد أذن مجمع (Excel)</button>
     </div>
-    ${t==='consumption'?`<form id="cnsf">${rConsF()}<button class="btn-primary" type="submit" style="margin-top:6px;">تسجيل الاستهلاك وخصم رصيد المعمل فوراً</button></form>`:`
+    ${t==='consumption'?`<form id="cnsf">${rConsF()}<button class="btn-primary" type="submit" style="margin-top:6px;">تسجيل الاستهلاك وخصم رصيد المعمل فوراً</button></form>`
+    :t==='excel_import'?rXlsImport()
+    :`
     <form id="nf">
       ${t==='addition'?rAddF():rSubF()}
       <div class="slabel">المرفقات</div>
@@ -1753,17 +1938,22 @@ function rManifest(rn){
         </div>
       </div>
       <table class="mtbl">
-        <thead><tr><th>#</th><th>تاريخ الأوردر</th><th>اسم العميل</th><th>المعمل</th><th>كود الصنف</th><th>اسم الصنف</th><th>التشغيلة</th><th>تاريخ الانتهاء</th></tr></thead>
+        <thead><tr><th>#</th><th>رقم الإذن</th><th>تاريخ الأوردر</th><th>القطاع</th><th>اسم العميل</th><th>المعمل</th><th>كود الصنف</th><th>اسم الصنف</th><th>التشغيلة</th><th>تاريخ الانتهاء</th><th>الكمية</th><th>الوحدة</th><th>ملاحظات</th></tr></thead>
         <tbody>${myOrds.length?myOrds.map((o,i)=>`<tr>
           <td>${i+1}</td>
+          <td>${o.inv||'-'}</td>
           <td>${schedDateLabel(orderDateStr(o))}</td>
+          <td>${o.sectorName||sname(o.sector)||'-'}</td>
           <td>${o.cname||o.ccode||'-'}</td>
           <td>${o.labName||'-'}</td>
           <td>${o.icode||'-'}</td>
           <td>${o.iname||'-'}</td>
           <td>${o.batch||'-'}</td>
           <td>${o.expiry?new Date(o.expiry).toLocaleDateString('ar-EG'):'-'}</td>
-        </tr>`).join(''):`<tr><td colspan="8" style="padding:16px;color:var(--muted);">لا توجد أوردرات حالية مع هذا المندوب</td></tr>`}</tbody>
+          <td>${o.qty||'-'}</td>
+          <td>${o.unit||'-'}</td>
+          <td>${o.note||'-'}</td>
+        </tr>`).join(''):`<tr><td colspan="13" style="padding:16px;color:var(--muted);">لا توجد أوردرات حالية مع هذا المندوب</td></tr>`}</tbody>
       </table>
       <div class="msig">
         <div class="sigbox"><div class="sigline">توقيع المندوب</div></div>
@@ -2188,16 +2378,20 @@ function rOrd(){
     <div class="kv"><span>الانتهاء</span><b>${o.expiry||'-'}</b></div>
     <div class="kv"><span>الكمية</span><b>${o.qty}</b></div>`;
   }else{
-    const isRegular=o.orderType==='regular';
-    const bal=isRegular?0:gb(o.ccode,o.icode);
-    flds=`<div class="kv"><span>نوع الأوردر</span><b style="color:${isRegular?'var(--warn)':'var(--ok)'}">${isRegular?'🧾 أوردر عادي (لا يمس الأمانة)':'📦 صرف من الأمانة'}</b></div>
+    const isExcel=o.orderType==='excel';
+    const isRegular=o.orderType==='regular'||isExcel;
+    const isAmanah=o.orderType==='amanah';
+    const bal=isAmanah?gb(o.ccode,o.icode):0;
+    const typeLbl=isExcel?'📥 أذن مجمع (استيراد Excel)':isRegular?'🧾 أوردر عادي (لا يمس الأمانة)':'📦 صرف من الأمانة';
+    flds=`<div class="kv"><span>نوع الأوردر</span><b style="color:${isAmanah?'var(--ok)':'var(--warn)'}">${typeLbl}</b></div>
+    ${isExcel&&o.inv?`<div class="kv"><span>رقم الإذن</span><b>${o.inv}</b></div>`:''}
     <div class="kv"><span>العميل</span><b>${o.ccode} — ${o.cname||''}</b></div>
     <div class="kv"><span>الصنف</span><b>${o.icode} — ${o.iname||''}</b></div>
     <div class="kv"><span>القطاع</span><b>${o.sectorName||sname(o.sector)||'-'}</b></div>
-    <div class="kv"><span>الكمية المطلوبة</span><b>${o.qty}</b></div>
-    ${!isRegular?`<div class="kv"><span>الرصيد المتبقي</span><b style="color:${bal>0?'var(--ok)':'var(--bad)'}">${bal}</b></div>`:''}
+    <div class="kv"><span>الكمية المطلوبة</span><b>${o.qty}${o.unit?' '+o.unit:''}</b></div>
+    ${isAmanah?`<div class="kv"><span>الرصيد المتبقي</span><b style="color:${bal>0?'var(--ok)':'var(--bad)'}">${bal}</b></div>`:''}
     <div class="kv"><span>الباتش</span><b>${o.batch||'-'}</b></div>
-    ${!isRegular?`<div class="kv"><span>الكونتر / الدور</span><b>${o.counterName||o.counterCode||'-'}</b></div>
+    ${isAmanah?`<div class="kv"><span>الكونتر / الدور</span><b>${o.counterName||o.counterCode||'-'}</b></div>
     <div class="kv"><span>المعمل الحالي</span><b>🏭 ${o.labName||'-'}</b></div>
     ${o.labHistory&&o.labHistory.length?`<div class="kv"><span>سجل تحويل المعمل</span><b style="font-size:11px;">${o.labHistory.map(h=>`${h.from}→${h.to}`).join(' | ')}</b></div>`:''}`:''}`;
   }
@@ -2299,7 +2493,7 @@ function rOrd(){
   }
 
   // إتاحة "سحوبات" (سحب جزئي من الرصيد في أي وقت) من أوردر إضافة تم اعتماده، أو من أوردر صرف تم تسليمه
-  const canRecall=((o.kind==='addition'&&o.stage==='approved')||(o.kind==='withdrawal'&&o.stage==='delivered'&&o.orderType!=='regular'))&&(ia||u.role==='data_entry');
+  const canRecall=((o.kind==='addition'&&o.stage==='approved')||(o.kind==='withdrawal'&&o.stage==='delivered'&&o.orderType==='amanah'))&&(ia||u.role==='data_entry');
   if(canRecall){
     acts += `<div class="brow" style="margin-top:6px;">
       <button class="bs" data-a="custret" data-id="${o.id}" style="background:#78350F;color:#fff;border-radius:9px;padding:10px;font-weight:800;width:100%;">
@@ -2309,7 +2503,7 @@ function rOrd(){
   }
 
   const tc=o.kind==='addition'?'ta':(o.kind==='withdrawal'||o.kind==='return'||o.kind==='customer_return')?'tw':'tt';
-  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي':'صرف'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
+  const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي':o.orderType==='excel'?'أذن مجمع':'صرف'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
   const sc=(o.stage==='rejected')?'var(--bad)':(o.stage==='delivered'||o.stage==='approved'||o.stage==='returned'||o.stage==='customer_returned')?'var(--ok)':'var(--warn)';
   const qcOpts=['','مقبول','مرفوض','تحت الفحص','تالف'];
   return`
@@ -2421,7 +2615,10 @@ function rAdm(){return`
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
       <div style="font-weight:800;margin-bottom:6px;">🔗 كيف يدخل زملاؤك على البرنامج؟</div>
       <div style="font-size:12px;line-height:2;color:var(--blue2);">
-        
+        1. اضغط <b>Share / مشاركة</b> أعلى شات Claude وانسخ الرابط.<br>
+        2. أرسل الرابط للموظف يفتحه من Chrome أو Safari.<br>
+        3. أنشئ له حساب من الأسفل بيوزر وباسورد ودور.<br>
+        4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
       </div>
     </div>
     <div class="slabel">إضافة مستخدم</div>
@@ -2608,6 +2805,9 @@ function bind(){
     sel.addEventListener('change',toggleSec);
   });
   const cpf=document.getElementById('cpf');if(cpf)cpf.addEventListener('change',onCarPhoto);
+  const xf=document.getElementById('xlsFileInput');if(xf)xf.addEventListener('change',onXlsFile);
+  document.querySelectorAll('[data-xlsmap]').forEach(sel=>sel.addEventListener('change',()=>{if(xlsImp)xlsImp.mapping[sel.dataset.xlsmap]=+sel.value;}));
+  document.querySelectorAll('[data-repmap]').forEach(sel=>sel.addEventListener('change',()=>{if(xlsImp)xlsImp.repMap[sel.dataset.repmap]=sel.value;}));
 }
 
 function bbl(){
@@ -2772,7 +2972,7 @@ async function onCarPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -2796,8 +2996,12 @@ function onA(e){
   else if(a==='cntlog'){S.cntLogCode=el.dataset.cnt;S.tab='cntlog';render();}
   else if(a==='qc'){doQC(id);}
   else if(a==='logout'){stopAmbient();S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
-  else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;render();}
-  else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;render();}
+  else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;xlsImp=null;render();}
+  else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;if(el.dataset.type!=='excel_import')xlsImp=null;render();}
+  else if(a==='xls-continue'){xlsContinueToPreview();}
+  else if(a==='xls-back'){if(xlsImp)xlsImp.step='map';render();}
+  else if(a==='xls-cancel'){xlsImp=null;render();}
+  else if(a==='xls-confirm'){xlsConfirmImport();}
   else if(a==='wtype'){S.wtype=el.dataset.wt;render();}
   else if(a==='flt'){if(S.user.role==='admin'){S.hflt=el.dataset.stage.split(',');S.hfltLabel=el.dataset.label||'';render();}}
   else if(a==='clf'){S.hflt=null;S.hfltLabel='';render();}
@@ -3063,14 +3267,14 @@ async function doWH(id){
   // تأكيد نهائي لاستلام مرتجع من تسليم جزئي → إضافة الرصيد (الكمية كانت لم تصل للعميل أصلاً) — لا يُضاف رصيد أمانة للأوردر العادي (SMS) لأنه أصلاً لا يمس رصيد الأمانة
   if(o.stage==='return_pending_wh'){
     if(o.balAdded){toast('⚠️ تمت إضافة هذا الرصيد مسبقاً');return;}
-    if(o.orderType!=='regular'){
+    if(o.orderType==='amanah'){
       const k=bk(o.ccode,o.icode,o.batch);
       DB.balances[k]=(DB.balances[k]||0)+(+o.qty);
     }
     o.balAdded=true;
     o.stage='returned';
     o.updAt=Date.now();await svo();
-    anim(o.orderType==='regular'?'✅ تم تأكيد استلام مرتجع الأوردر العادي بالمخزن':'✅ تم تأكيد الاستلام بالمخزن وإضافة الرصيد للعميل',()=>{S.tab='home';S.oid=null;});
+    anim(o.orderType!=='amanah'?'✅ تم تأكيد استلام المرتجع بالمخزن':'✅ تم تأكيد الاستلام بالمخزن وإضافة الرصيد للعميل',()=>{S.tab='home';S.oid=null;});
     return;
   }
   // تأكيد نهائي لسحوبات (سحب بضاعة من رصيد العميل) → خصم الرصيد من المصدر، ولو كانت من معمل فالبضاعة بترجع فعلياً لأمانة المخزن
@@ -3149,7 +3353,7 @@ async function doRDlv(id){
     o.dlvQty=dlvQty;
     o.retQty=retQty;
     o.dloc=loc||null;
-    if(o.kind==='withdrawal'&&o.orderType!=='regular'){
+    if(o.kind==='withdrawal'&&o.orderType==='amanah'){
       const k=bk(o.ccode,o.icode,o.batch);
       DB.balances[k]=(DB.balances[k]||0)-(+o.qty);
       o.balDeducted=true;
@@ -3540,7 +3744,7 @@ function doXLS(){
   const hd=[['التاريخ','النوع','رقم الأمر','العميل','الصنف','التشغيلة (Batch)','تاريخ الانتهاء','الكمية','الحالة','المندوب','رقم العربية','المعمل','مسؤول الخدمة/الدكتور','بواسطة','ملحوظة']];
   DB.orders.forEach(o=>{
     const doctorName = o.kind==='withdrawal'&&o.counterCode ? u2n((DB.counters.find(c=>c.code===o.counterCode)||{}).owner) : (o.cby?u2n(o.cby):'-');
-    const kindLabel = o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي (SMS)':'صرف من الأمانة'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':o.kind==='lab_transfer'?'تحويل بين معامل':o.kind==='consumption'?'استهلاك':o.kind==='counter_return'?'استرجاع كونتر':'تحويل';
+    const kindLabel = o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي (SMS)':o.orderType==='excel'?'أذن مجمع (استيراد Excel)':'صرف من الأمانة'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':o.kind==='lab_transfer'?'تحويل بين معامل':o.kind==='consumption'?'استهلاك':o.kind==='counter_return'?'استرجاع كونتر':'تحويل';
     hd.push([
       new Date(o.createdAt||Date.now()).toLocaleDateString('ar-EG'),
       kindLabel,
