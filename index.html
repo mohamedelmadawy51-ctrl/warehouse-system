@@ -207,6 +207,9 @@ table.rep th{color:var(--muted);font-weight:800;font-size:10px;background:var(--
 
 @media(min-width:640px){#app{box-shadow:0 0 40px rgba(11,56,102,.12);}}
 @media print{.tabbar,.topbar,.brow,.pillbar,button,[data-a]{display:none!important;}body{background:#fff;}.content{padding:0;}.card{box-shadow:none;border:1px solid #ddd;page-break-inside:avoid;}}
+@media print{html,body{height:auto!important;overflow:visible!important;}#app{max-width:100%!important;height:auto!important;overflow:visible!important;}}
+.no-print{}
+@media print{.no-print{display:none!important;}}
 
 /* MANIFEST — كشف تحرك المندوب (صفحة طباعة مستقلة بالعرض) */
 .manifest-outer{background:#e9edf2;min-height:100vh;padding:18px 12px 40px;}
@@ -237,6 +240,8 @@ table.mtbl tr:nth-child(even) td{background:#f6f8fa;}
   @page{size:A4 landscape;margin:8mm;}
   .manifest-outer{background:#fff;padding:0;}
   .mpaper{box-shadow:none;max-width:100%;padding:4mm 8mm;border-radius:0;}
+  table.mtbl thead{display:table-header-group;}
+  table.mtbl tr{page-break-inside:avoid;}
 }
 
   .bottom-logo{position:fixed !important;bottom:60px;left:12px !important;right:auto !important;z-index:25;width:44px;height:44px;border-radius:10px;background:#fff;padding:3px;box-shadow:0 2px 8px rgba(0,0,0,.15);object-fit:contain;opacity:.85;}
@@ -905,7 +910,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -947,6 +952,58 @@ const XLS_IMPORT_FIELDS=[
 ];
 let xlsImp=null; // {fileName,headers,rawRows,mapping,repMap,step,parsedRows}
 function xh(s){return (s||'').toString().trim().replace(/\s+/g,' ');}
+// فلترة أوردرات مندوب معيّن حسب يوم محدد (كاليندر) و/أو نص بحث (رقم الإذن/العميل/الصنف) — تُستخدم في تقرير المندوبين والأذن المجمع معاً
+function repOrdsFiltered(rn){
+  let myOrds=DB.orders.filter(o=>o.repName&&o.repName.trim()===rn);
+  if(!S.repCalAll){
+    const day=S.repCalDate||ymd(Date.now());
+    myOrds=myOrds.filter(o=>orderDateStr(o)===day);
+  }
+  const q=xh(S.repSearch||'').toLowerCase();
+  if(q){
+    myOrds=myOrds.filter(o=>[o.inv,o.cname,o.ccode,o.icode,o.iname,o.repName,o.batch,o.note].some(v=>(v||'').toString().toLowerCase().includes(q)));
+  }
+  return myOrds.sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+}
+function exportRowsToXLS(rows,filename,sheetName){
+  if(typeof XLSX==='undefined'){toast('⏳ مكتبة Excel لسه بتحمّل — جرّب تاني بعد لحظة');return;}
+  if(!rows||!rows.length){toast('⚠️ لا توجد بيانات لتصديرها');return;}
+  const ws=XLSX.utils.json_to_sheet(rows);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,sheetName||'Sheet1');
+  XLSX.writeFile(wb,filename);
+}
+function orderToXlsRow(o){
+  return {
+    'رقم الإذن':o.inv||'',
+    'تاريخ الأوردر':schedDateLabel(orderDateStr(o)),
+    'القطاع':o.sectorName||sname(o.sector)||'',
+    'فئة البيع':o.priceCat||'',
+    'كود العميل':o.ccode||'',
+    'اسم العميل':o.cname||'',
+    'كود الصنف':o.icode||'',
+    'اسم الصنف':o.iname||'',
+    'التشغيلة':o.batch||'',
+    'تاريخ الانتهاء':o.expiry?new Date(o.expiry).toLocaleDateString('ar-EG'):'',
+    'الكمية':o.qty||0,
+    'الوحدة':o.unit||'',
+    'سُلِّم':o.dlvQty||'',
+    'مُرجَع':o.retQty||'',
+    'المندوب':o.repName||'',
+    'رقم السيارة':o.carNo||'',
+    'الحالة':SLBL[o.stage]||o.stage||'',
+    'ملاحظات':o.note||''
+  };
+}
+function repBoxRows(rn,box){
+  const myOrds=repOrdsFiltered(rn);
+  if(box==='delivered')return myOrds.filter(o=>o.stage==='delivered'&&!o.retQty);
+  if(box==='partial')return myOrds.filter(o=>o.stage==='delivered'&&o.retQty>0);
+  if(box==='pending')return myOrds.filter(o=>['pending_rep','with_rep'].includes(o.stage));
+  if(box==='returns')return myOrds.filter(o=>o.kind==='return'||o.kind==='customer_return');
+  return [];
+}
+const REPBOX_LBL={delivered:'تسليم كامل',partial:'تسليم جزئي',pending:'لم يُنفَّذ',returns:'مرتجعات'};
 function xlsAutoMatch(headers){
   const map={};
   XLS_IMPORT_FIELDS.forEach(fd=>{
@@ -1546,8 +1603,9 @@ function rHome(){
     {key:'rep',l:'المندوب',ic:'🧍',stages:['pending_rep','with_rep','return_pending_rep'],retStages:['return_pending_rep'],roles:['admin','rep']},
   ];
   groups.forEach(g=>{
-    g.total=DB.orders.filter(o=>g.stages.includes(o.stage)).length;
-    g.retCnt=DB.orders.filter(o=>g.retStages.includes(o.stage)).length;
+    const mine=o=>u.role!=='rep'||(o.repName===u.name||o.repName===u.username);
+    g.total=DB.orders.filter(o=>g.stages.includes(o.stage)&&mine(o)).length;
+    g.retCnt=DB.orders.filter(o=>g.retStages.includes(o.stage)&&mine(o)).length;
   });
   // الأحدث دائماً فوق: نرتب بالأحدث تحديثاً ثم بالأحدث إنشاءً كفاصل تعادل
   let list=forRole(u).sort((a,b)=>(b.updAt||b.updatedAt||b.createdAt||0)-(a.updAt||a.updatedAt||a.createdAt||0)||(b.createdAt||0)-(a.createdAt||0));
@@ -1904,7 +1962,7 @@ function inRng(o,r){
 }
 
 function rManifest(rn){
-  const myOrds=DB.orders.filter(o=>o.repName&&o.repName.trim()===rn&&['pending_rep','with_rep'].includes(o.stage)).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+  const myOrds=repOrdsFiltered(rn).filter(o=>['pending_rep','with_rep'].includes(o.stage));
   const drvUser=DB.users.find(u=>u.role==='rep'&&u.name===rn);
   // نحدد صورة السيارة الأكثر تكرارًا بين أوردرات المندوب الحالية (رحلة واحدة غالبًا بعربية واحدة)
   const carCounts={};
@@ -1915,7 +1973,10 @@ function rManifest(rn){
   const driverPhoto=(drvUser&&drvUser.photo)?drvUser.photo:(carOrd?carOrd.driverPhoto:'');
   const now=new Date();
   return `<div class="manifest-outer">
-    <div class="manifest-bar">
+    <div class="manifest-bar no-print" style="flex-wrap:wrap;">
+      <input type="date" id="mfDate" value="${S.repCalDate||ymd(Date.now())}" ${S.repCalAll?'disabled':''} style="padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
+      <button type="button" class="bs ${S.repCalAll?'bgo':'bghost'}" data-a="repcalall">${S.repCalAll?'📅 كل الأيام':'📅 يوم محدد'}</button>
+      <input type="text" id="mfSearch" placeholder="🔍 بحث برقم الإذن / العميل / الصنف" value="${S.repSearch||''}" style="flex:1;min-width:160px;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
       <button type="button" class="bs bghost" data-a="back-manifest">◀ رجوع</button>
       <button type="button" class="bs bgo" data-a="pdf">🖨️ طباعة</button>
     </div>
@@ -1925,7 +1986,7 @@ function rManifest(rn){
           <img src="${LOGO}" alt="IFT">
           <div><h2>كشف تحرك مندوب</h2><div class="mh-sub">IFT CORPORATION — بضاعة الأمانة</div></div>
         </div>
-        <div class="mh-r">تاريخ الطباعة: ${now.toLocaleDateString('ar-EG')}<br>عدد الأوردرات: ${myOrds.length}</div>
+        <div class="mh-r">تاريخ الطباعة: ${now.toLocaleDateString('ar-EG')}<br>عدد الأوردرات: ${myOrds.length}${S.repCalAll?'':' — ليوم '+schedDateLabel(S.repCalDate||ymd(Date.now()))}</div>
       </div>
       <div class="mdrv">
         <div class="mdrv-card">
@@ -1938,13 +1999,15 @@ function rManifest(rn){
         </div>
       </div>
       <table class="mtbl">
-        <thead><tr><th>#</th><th>رقم الإذن</th><th>تاريخ الأوردر</th><th>القطاع</th><th>اسم العميل</th><th>المعمل</th><th>كود الصنف</th><th>اسم الصنف</th><th>التشغيلة</th><th>تاريخ الانتهاء</th><th>الكمية</th><th>الوحدة</th><th>ملاحظات</th></tr></thead>
+        <thead><tr><th>#</th><th>رقم الإذن</th><th>تاريخ الأوردر</th><th>القطاع</th><th>فئة البيع</th><th>كود العميل</th><th>اسم العميل</th><th>المعمل</th><th>كود الصنف</th><th>اسم الصنف</th><th>التشغيلة</th><th>تاريخ الانتهاء</th><th>الكمية</th><th>الوحدة</th><th>ملاحظات</th></tr></thead>
         <tbody>${myOrds.length?myOrds.map((o,i)=>`<tr>
           <td>${i+1}</td>
           <td>${o.inv||'-'}</td>
           <td>${schedDateLabel(orderDateStr(o))}</td>
           <td>${o.sectorName||sname(o.sector)||'-'}</td>
-          <td>${o.cname||o.ccode||'-'}</td>
+          <td>${o.priceCat||'-'}</td>
+          <td>${o.ccode||'-'}</td>
+          <td>${o.cname||'-'}</td>
           <td>${o.labName||'-'}</td>
           <td>${o.icode||'-'}</td>
           <td>${o.iname||'-'}</td>
@@ -1953,7 +2016,7 @@ function rManifest(rn){
           <td>${o.qty||'-'}</td>
           <td>${o.unit||'-'}</td>
           <td>${o.note||'-'}</td>
-        </tr>`).join(''):`<tr><td colspan="13" style="padding:16px;color:var(--muted);">لا توجد أوردرات حالية مع هذا المندوب</td></tr>`}</tbody>
+        </tr>`).join(''):`<tr><td colspan="15" style="padding:16px;color:var(--muted);">لا توجد أوردرات مطابقة${S.repCalAll?'':' في هذا اليوم'}</td></tr>`}</tbody>
       </table>
       <div class="msig">
         <div class="sigbox"><div class="sigline">توقيع المندوب</div></div>
@@ -1967,7 +2030,7 @@ function rRep(){
   const rng=S.rng, u=S.user;
   const isAdmin = ['admin','accounts','warehouse','quality'].includes(u.role); // الحسابات والمخازن والجودة والأدمن يشوفوا كل التقارير، مدخل البيانات يشوف عملاءه فقط
   // مدخل البيانات يرى فقط العمليات التي أدخلها هو
-  const baseList = isAdmin ? DB.orders : DB.orders.filter(o=>o.cby===u.username);
+  const baseList = isAdmin ? DB.orders : (u.role==='rep' ? DB.orders.filter(o=>o.repName&&(o.repName.trim()===u.name||o.repName.trim()===u.username)) : DB.orders.filter(o=>o.cby===u.username));
   const list=baseList.filter(o=>inRng(o,rng)&&((u.role!=='data_entry'&&u.role!=='accounts')||!u.sector||(()=>{const it=fi(o.icode);return !it||it.sector===u.sector;})()));
   const adds=list.filter(o=>o.kind==='addition'),subs=list.filter(o=>o.kind==='withdrawal'&&o.orderType!=='regular'),trs=list.filter(o=>o.kind==='transfer');
   const regOrders=list.filter(o=>o.kind==='withdrawal'&&o.orderType==='regular');
@@ -2078,49 +2141,76 @@ function rRep(){
     ${(u.role==='rep'||isAdmin)?`
     </div><div class="repgrp ${(S.repGrp||'overview')==='reps'?'':'hide'}">
     <div class="slabel">📋 تقارير المندوبين</div>
+    <div class="card no-print" style="margin-bottom:10px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input type="date" id="repCalInput" value="${S.repCalDate||ymd(Date.now())}" ${S.repCalAll?'disabled':''} style="padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
+        <button type="button" class="bs ${S.repCalAll?'bgo':'bghost'}" data-a="repcalall">${S.repCalAll?'📅 عرض كل الأيام':'📅 تصفية بيوم واحد'}</button>
+        <input type="text" id="repSearchInput" placeholder="🔍 بحث برقم الإذن / العميل / الصنف" value="${S.repSearch||''}" style="flex:1;min-width:160px;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
+      </div>
+      ${!S.repCalAll?`<div style="font-size:11px;color:var(--muted);margin-top:6px;">عرض أوردرات يوم: <b style="color:var(--blue2);">${schedDateLabel(S.repCalDate||ymd(Date.now()))}</b> فقط</div>`:''}
+    </div>
     ${(()=>{
       // اجمع أسماء كل المندوبين
       const repNames=[...new Set(DB.orders.filter(o=>o.repName).map(o=>o.repName.trim()))];
       const myReps=u.role==='rep'?repNames.filter(rn=>rn===u.name||rn===u.username):repNames;
+      if(!myReps.length)return `<div class="card" style="text-align:center;color:var(--muted);padding:16px;">لا توجد بيانات مناديب</div>`;
       return myReps.map(rn=>{
-        const myOrds=DB.orders.filter(o=>o.repName&&o.repName.trim()===rn);
+        const myOrds=repOrdsFiltered(rn);
         const delivered=myOrds.filter(o=>o.stage==='delivered'&&!o.retQty).length;
         const partial=myOrds.filter(o=>o.stage==='delivered'&&o.retQty>0);
-        const pending=myOrds.filter(o=>['pending_rep','with_rep'].includes(o.stage)).length;
+        const pendingList=myOrds.filter(o=>['pending_rep','with_rep'].includes(o.stage));
+        const pending=pendingList.length;
         const returns=myOrds.filter(o=>o.kind==='return'||o.kind==='customer_return').length;
         const totalDlv=myOrds.filter(o=>o.stage==='delivered').reduce((s,o)=>s+(+(o.dlvQty||o.qty)||0),0);
+        const openBox=(S.repBoxOpen&&S.repBoxOpen.rep===rn)?S.repBoxOpen.box:null;
+        const boxRows=openBox?repBoxRows(rn,openBox):[];
         return `<div class="card" style="margin-bottom:10px;">
           <div class="ch">
             <div><div class="ctitle">🧍 ${rn}</div></div>
             <span class="tag ta">${delivered+partial.length} مُسلَّم</span>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-top:8px;text-align:center;">
-            <div style="background:var(--ok-bg);border-radius:9px;padding:8px;">
+            <div style="background:var(--ok-bg);border-radius:9px;padding:8px;cursor:pointer;${openBox==='delivered'?'outline:2px solid var(--ok);':''}" data-a="repbox" data-rep="${rn}" data-box="delivered">
               <div style="font-size:18px;font-weight:900;color:var(--ok)">${delivered}</div>
               <div style="font-size:9px;color:var(--muted);">تسليم كامل</div>
             </div>
-            <div style="background:var(--warn-bg);border-radius:9px;padding:8px;">
+            <div style="background:var(--warn-bg);border-radius:9px;padding:8px;cursor:pointer;${openBox==='partial'?'outline:2px solid var(--warn);':''}" data-a="repbox" data-rep="${rn}" data-box="partial">
               <div style="font-size:18px;font-weight:900;color:var(--warn)">${partial.length}</div>
               <div style="font-size:9px;color:var(--muted);">تسليم جزئي</div>
             </div>
-            <div style="background:var(--blue-lg);border-radius:9px;padding:8px;">
+            <div style="background:var(--blue-lg);border-radius:9px;padding:8px;cursor:pointer;${openBox==='pending'?'outline:2px solid var(--blue2);':''}" data-a="repbox" data-rep="${rn}" data-box="pending">
               <div style="font-size:18px;font-weight:900;color:var(--blue2)">${pending}</div>
               <div style="font-size:9px;color:var(--muted);">لم يُنفَّذ</div>
             </div>
-            <div style="background:var(--bad-bg);border-radius:9px;padding:8px;">
+            <div style="background:var(--bad-bg);border-radius:9px;padding:8px;cursor:pointer;${openBox==='returns'?'outline:2px solid var(--bad);':''}" data-a="repbox" data-rep="${rn}" data-box="returns">
               <div style="font-size:18px;font-weight:900;color:var(--bad)">${returns}</div>
               <div style="font-size:9px;color:var(--muted);">مرتجعات</div>
             </div>
           </div>
-          ${partial.length>0?`<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px;">
-            <div style="font-size:11px;font-weight:800;color:var(--warn);margin-bottom:4px;">تسليم جزئي التفاصيل:</div>
-            ${partial.map(o=>`<div style="font-size:11px;display:flex;justify-content:space-between;padding:2px 0;color:var(--muted);">
-              <span>${o.cname||o.ccode} — ${o.iname||o.icode}</span>
-              <span>سُلِّم:<b style="color:var(--ok)"> ${o.dlvQty}</b> | مُرجَع:<b style="color:var(--bad)"> ${o.retQty}</b></span>
-            </div>`).join('')}
+          ${openBox?`<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">
+              <div style="font-size:11.5px;font-weight:800;color:var(--blue2);">📄 تفاصيل: ${REPBOX_LBL[openBox]} (${boxRows.length})</div>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="bs bghost no-print" style="padding:5px 10px;font-size:11px;" data-a="repboxxls" data-rep="${rn}" data-box="${openBox}">📤 Excel</button>
+                <button type="button" class="bs bghost no-print" style="padding:5px 10px;font-size:11px;" data-a="pdf">🖨️ طباعة</button>
+              </div>
+            </div>
+            <div style="overflow-x:auto;"><table class="rep" style="font-size:10.5px;">
+              <thead><tr><th>الإذن</th><th>العميل</th><th>الصنف</th><th>التشغيلة</th><th>الكمية</th><th>الوحدة</th><th>الحالة</th><th>ملاحظات</th></tr></thead>
+              <tbody>${boxRows.length?boxRows.map(o=>`<tr>
+                <td>${o.inv||'-'}</td>
+                <td>${o.cname||o.ccode||'-'}</td>
+                <td>${o.iname||o.icode||'-'}</td>
+                <td>${o.batch||'-'}</td>
+                <td style="font-weight:800;">${o.dlvQty||o.qty||'-'}${(openBox==='partial'&&o.retQty)?` <span style="color:var(--bad);">(مرتجع ${o.retQty})</span>`:''}</td>
+                <td>${o.unit||'-'}</td>
+                <td>${SLBL[o.stage]||o.stage||'-'}</td>
+                <td>${o.note||'-'}</td>
+              </tr>`).join(''):`<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:10px;">لا توجد بيانات</td></tr>`}</tbody>
+            </table></div>
           </div>`:''}
           <div class="kv" style="margin-top:6px;"><span>إجمالي الكميات المُسلَّمة</span><b style="color:var(--ok)">${totalDlv}</b></div>
-          ${pending>0?`<button type="button" class="bs bgo" style="width:100%;margin-top:9px;" data-a="printrep" data-rep="${rn}">🖨️ طباعة كشف تحرك (${pending} أوردر لم يُنفَّذ بعد)</button>`:''}
+          ${pending>0?`<button type="button" class="bs bgo" style="width:100%;margin-top:9px;" data-a="printrep" data-rep="${rn}">🖨️ طباعة كشف تحرك (${pending} أوردر لم يُنفَّذ بعد${S.repCalAll?'':' — يوم '+schedDateLabel(S.repCalDate||ymd(Date.now()))})</button>`:''}
         </div>`;
       }).join('');
     })()}
@@ -2789,6 +2879,10 @@ function bind(){
   lkSel('scc','scn','c');lkSel('sic','sin','i','sisec','sisecval');
   lkSel('tcc','tcn','c');lkSel('tic','tin','i');
   bbl();tbbl();bsi();bhsi();bclsi();blcsi();checkInvDup();
+  const rci=document.getElementById('repCalInput');if(rci)rci.addEventListener('change',()=>{S.repCalDate=rci.value;render();});
+  const rsi=document.getElementById('repSearchInput');if(rsi)rsi.addEventListener('input',()=>{S.repSearch=rsi.value;render();const e2=document.getElementById('repSearchInput');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});
+  const mfd=document.getElementById('mfDate');if(mfd)mfd.addEventListener('change',()=>{S.repCalDate=mfd.value;render();});
+  const mfs=document.getElementById('mfSearch');if(mfs)mfs.addEventListener('input',()=>{S.repSearch=mfs.value;render();const e2=document.getElementById('mfSearch');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});
   const af=document.getElementById('atf');if(af)af.addEventListener('change',onAtt);
   const upf=document.getElementById('upf');if(upf)upf.addEventListener('change',onUPhoto);
   const aurole=document.getElementById('aurole');
@@ -2972,7 +3066,7 @@ async function onCarPhoto(e){
 function onA(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -3001,9 +3095,11 @@ function onA(e){
   else if(a==='xls-continue'){xlsContinueToPreview();}
   else if(a==='xls-back'){if(xlsImp)xlsImp.step='map';render();}
   else if(a==='xls-cancel'){xlsImp=null;render();}
-  else if(a==='xls-confirm'){xlsConfirmImport();}
+  else if(a==='repcalall'){S.repCalAll=!S.repCalAll;render();}
+  else if(a==='repbox'){const rep=el.dataset.rep,box=el.dataset.box;S.repBoxOpen=(S.repBoxOpen&&S.repBoxOpen.rep===rep&&S.repBoxOpen.box===box)?null:{rep,box};render();}
+  else if(a==='repboxxls'){const rows=repBoxRows(el.dataset.rep,el.dataset.box).map(orderToXlsRow);exportRowsToXLS(rows,`${el.dataset.rep}_${REPBOX_LBL[el.dataset.box]}.xlsx`,REPBOX_LBL[el.dataset.box]);}
   else if(a==='wtype'){S.wtype=el.dataset.wt;render();}
-  else if(a==='flt'){if(S.user.role==='admin'){S.hflt=el.dataset.stage.split(',');S.hfltLabel=el.dataset.label||'';render();}}
+  else if(a==='flt'){if(S.user.role==='admin'||S.user.role==='rep'){S.hflt=el.dataset.stage.split(',');S.hfltLabel=el.dataset.label||'';render();}}
   else if(a==='clf'){S.hflt=null;S.hfltLabel='';render();}
   else if(a==='calday'){S.calDate=el.dataset.date;S.calAll=false;render();}
   else if(a==='calweek'){S.calDate=addDaysStr(S.calDate||ymd(Date.now()),7*(+el.dataset.dir));render();}
