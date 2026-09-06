@@ -952,6 +952,19 @@ function planFefoWithdrawal(ccode,icode,qty){
   }
   return {chunks,balanceOps:chunks.flatMap(c=>c.ops),dispense:chunks.map(c=>({batch:c.batch,expiry:c.expiry,qty:c.qty,swapped:c.swapped})),fulfilled:remaining<=0,shortfall:Math.max(0,remaining)};
 }
+// خطة "افتراضية" (Default/Planned) — أقرب تشغيلة صلاحية عند نفس العميل فقط، من غير أي تبادل مع عملاء آخرين
+// بتُستخدم للمقارنة في التقرير مع الخطة الفعلية (Actual/FEFO) اللي بتاخد بعين الاعتبار كل العملاء
+function customerOwnFefoPlan(ccode,icode,qty){
+  const rows=itemGlobalBatches(icode).filter(r=>r.ccode===ccode);
+  const dispense=[];let remaining=qty;
+  for(const row of rows){
+    if(remaining<=0)break;if(row.qty<=0)continue;
+    const take=Math.min(remaining,row.qty);if(take<=0)continue;
+    dispense.push({batch:row.batch,expiry:row.expiry,qty:take});
+    remaining-=take;
+  }
+  return {dispense,fulfilled:remaining<=0};
+}
 function applyBalanceOps(ops){
   (ops||[]).forEach(op=>{
     const k=bk(op.ccode,op.icode,op.batch);
@@ -2356,28 +2369,64 @@ function rRep(){
       <tbody>${balRows.length===0?`<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:14px;">لا توجد أرصدة أمانة بالمخزن</td></tr>`:
       balRows.map(([key,qty])=>{
         const parts=key.split('|');const cc=parts[0],ic=parts[1],batch=parts[2]||'';
-        const c=fc(cc);const it=fi(ic);const exp=findExpiry(cc,ic,batch);
+        const c=fc(cc);const it=fi(ic);const exp=batchExpiry(ic,batch)||findExpiry(cc,ic,batch);
         return`<tr><td>${c?c.name:cc}</td><td>${it?it.name:ic}</td><td>${it?sname(it.sector):'-'}</td><td>${batch||'-'}</td><td>${exp||'-'}</td><td style="font-weight:800;color:${qty>0?'var(--ok)':qty<0?'var(--bad)':'var(--muted)'}">${qty}</td></tr>`;
       }).join('')}</tbody>
     </table></div>
 
     <div class="slabel">🏭 أرصدة المعامل (بعد الصرف — في عهدة العميل)</div>
     <div style="overflow-x:auto;"><table class="rep">
-      <thead><tr><th>العميل</th><th>المعمل</th><th>الصنف</th><th>التشغيلة</th><th>الرصيد بالمعمل</th></tr></thead>
+      <thead><tr><th>العميل</th><th>المعمل</th><th>الصنف</th><th>التشغيلة</th><th>الصلاحية</th><th>الرصيد بالمعمل</th></tr></thead>
       <tbody>${(()=>{
         const labKeys=Object.entries(DB.labBalances).filter(([,v])=>v!==0);
         const filtered=isAdmin?labKeys:labKeys.filter(([key])=>{
           const cc_=key.split('|')[1];
           return myKeys&&[...myKeys].some(k=>k.startsWith(cc_+'|'));
         });
-        if(!filtered.length)return `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:14px;">لا توجد أرصدة بالمعامل بعد</td></tr>`;
+        if(!filtered.length)return `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:14px;">لا توجد أرصدة بالمعامل بعد</td></tr>`;
         return filtered.map(([key,qty])=>{
           const parts=key.split('|');const labCode=parts[0],cc=parts[1],ic=parts[2],batch=parts[3]||'';
           const lab=DB.labs.find(l=>l.code===labCode);const c=fc(cc);const it=fi(ic);
-          return `<tr><td>${c?c.name:cc}</td><td>🏭 ${lab?lab.name:labCode}</td><td>${it?it.name:ic}</td><td>${batch||'-'}</td><td style="font-weight:800;color:${qty>0?'var(--ok)':qty<0?'var(--bad)':'var(--muted)'}">${qty}</td></tr>`;
+          const exp=batchExpiry(ic,batch)||findExpiry(cc,ic,batch);
+          return `<tr><td>${c?c.name:cc}</td><td>🏭 ${lab?lab.name:labCode}</td><td>${it?it.name:ic}</td><td>${batch||'-'}</td><td>${exp||'-'}</td><td style="font-weight:800;color:${qty>0?'var(--ok)':qty<0?'var(--bad)':'var(--muted)'}">${qty}</td></tr>`;
         }).join('');
       })()}</tbody>
     </table></div>
+
+    <div class="slabel">🔍 تقرير الصرف الفعلي — Default مقابل FEFO</div>
+    <div class="card no-print" style="margin-bottom:8px;font-size:11px;color:var(--muted);">لكل أوردر صرف أمانة تم تسليمه: العمود الافتراضي (Default) بيوضّح إيه اللي كان المفروض يتصرف من رصيد العميل نفسه فقط، والعمود الفعلي (Actual FEFO) بيوضّح إيه اللي اتصرف فعليًا بعد تطبيق قاعدة أقرب صلاحية على مستوى المخزن ككل.</div>
+    <div style="overflow-x:auto;"><table class="rep" id="fefoAuditTbl">
+      <thead><tr><th>العميل</th><th>رقم الأوردر</th><th>الصنف</th><th>Default Batch</th><th>Default Expiry</th><th>رصيد العميل</th><th>Actual FEFO Batch</th><th>Actual Expiry</th><th>Actual Qty</th></tr></thead>
+      <tbody>${(()=>{
+        let fefoOrders=DB.orders.filter(o=>o.kind==='withdrawal'&&o.orderType==='amanah'&&o.fefoDispense&&o.fefoDispense.length);
+        if(!isAdmin)fefoOrders=fefoOrders.filter(o=>myKeys&&myKeys.has(o.ccode+'|'+o.icode));
+        if(!fefoOrders.length)return `<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:14px;">لا توجد أوردرات صرف مُسلَّمة بعد</td></tr>`;
+        fefoOrders.sort((a,b)=>(b.updAt||0)-(a.updAt||0));
+        return fefoOrders.map(o=>{
+          const defRows=(o.defaultDispense&&o.defaultDispense.length)?o.defaultDispense:[{batch:'-',expiry:null,qty:'-'}];
+          const rowCount=Math.max(defRows.length,o.fefoDispense.length);
+          let out='';
+          for(let i=0;i<rowCount;i++){
+            const d=defRows[i]||{},a=o.fefoDispense[i]||{};
+            const changed=(d.batch||'')!==(a.batch||'');
+            out+=`<tr>
+              ${i===0?`<td rowspan="${rowCount}">${o.cname||o.ccode}</td><td rowspan="${rowCount}">${o.inv||o.id}</td><td rowspan="${rowCount}">${o.iname||o.icode}</td>`:''}
+              <td>${d.batch||'-'}</td>
+              <td>${d.expiry?new Date(d.expiry).toLocaleDateString('ar-EG'):'-'}</td>
+              ${i===0?`<td rowspan="${rowCount}">${o.custBalanceAtDelivery??'-'}</td>`:''}
+              <td style="font-weight:800;${changed?'color:var(--warn);':''}">${a.batch||'-'}${a.swapped?' 🔄':''}</td>
+              <td>${a.expiry?new Date(a.expiry).toLocaleDateString('ar-EG'):'-'}</td>
+              <td style="font-weight:800;">${a.qty??'-'}</td>
+            </tr>`;
+          }
+          return out;
+        }).join('');
+      })()}</tbody>
+    </table></div>
+    <div class="brow no-print" style="margin-top:10px;">
+      <button type="button" class="bs bgo" data-a="fefoauditxls">📤 تصدير Excel</button>
+      <button type="button" class="bs bghost" data-a="pdf">🖨️ طباعة</button>
+    </div>
 
     </div><div class="repgrp ${(S.repGrp||'overview')==='counters'?'':'hide'}">
     ${isAdmin?`<div class="slabel">📦 الكونترات</div>
@@ -2579,13 +2628,22 @@ function rOrd(){
     ${isAmanah?`<div class="kv"><span>الكونتر / الدور</span><b>${o.counterName||o.counterCode||'-'}</b></div>
     <div class="kv"><span>المعمل الحالي</span><b>🏭 ${o.labName||'-'}</b></div>
     ${o.labHistory&&o.labHistory.length?`<div class="kv"><span>سجل تحويل المعمل</span><b style="font-size:11px;">${o.labHistory.map(h=>`${h.from}→${h.to}`).join(' | ')}</b></div>`:''}
-    ${o.fefoDispense&&o.fefoDispense.length?`<div style="margin-top:8px;background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 12px;">
-      <div style="font-size:11px;font-weight:800;color:var(--blue2);margin-bottom:5px;">📦 توزيع الصرف الفعلي (FEFO)</div>
-      ${o.fefoDispense.map(d=>`<div style="font-size:11px;display:flex;justify-content:space-between;padding:2px 0;">
-        <span>${d.batch||'-'} ${d.expiry?'— صلاحية '+new Date(d.expiry).toLocaleDateString('ar-EG'):''}${d.swapped?' <b style="color:var(--warn);">(تشغيلة عميل آخر — تم التعويض تلقائيًا)</b>':''}</span>
-        <b>${d.qty}</b>
-      </div>`).join('')}
-    </div>`:''}`:''}`;
+    ${o.fefoDispense&&o.fefoDispense.length?`<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div style="background:#f4f5f7;border:1px solid var(--line);border-radius:9px;padding:9px 12px;">
+        <div style="font-size:10.5px;font-weight:800;color:var(--muted);margin-bottom:5px;">📋 الافتراضي (Default — رصيد العميل نفسه فقط)</div>
+        ${(o.defaultDispense&&o.defaultDispense.length)?o.defaultDispense.map(d=>`<div style="font-size:11px;display:flex;justify-content:space-between;padding:2px 0;">
+          <span>${d.batch||'-'}${d.expiry?' — '+new Date(d.expiry).toLocaleDateString('ar-EG'):''}</span><b>${d.qty}</b>
+        </div>`).join(''):'<div style="font-size:11px;color:var(--muted);">-</div>'}
+      </div>
+      <div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 12px;">
+        <div style="font-size:10.5px;font-weight:800;color:var(--blue2);margin-bottom:5px;">✅ الفعلي (Actual FEFO)</div>
+        ${o.fefoDispense.map(d=>`<div style="font-size:11px;display:flex;justify-content:space-between;padding:2px 0;">
+          <span>${d.batch||'-'}${d.expiry?' — '+new Date(d.expiry).toLocaleDateString('ar-EG'):''}${d.swapped?' <b style="color:var(--warn);">(عميل آخر)</b>':''}</span><b>${d.qty}</b>
+        </div>`).join('')}
+      </div>
+    </div>
+    ${(o.fefoDispense.some(d=>d.swapped)||JSON.stringify((o.defaultDispense||[]).map(d=>d.batch))!==JSON.stringify(o.fefoDispense.map(d=>d.batch)))?`<div style="font-size:10.5px;color:var(--warn);font-weight:700;margin-top:5px;">⚠️ اختلف الصرف الفعلي عن الافتراضي بسبب تطبيق FEFO</div>`:''}
+    ${o.custBalanceAtDelivery!=null?`<div class="kv" style="margin-top:6px;"><span>رصيد العميل وقت الصرف</span><b>${o.custBalanceAtDelivery}</b></div>`:''}`:''}`:''}`;
   }
   if(o.note)flds+=`<div class="kv"><span>ملحوظة</span><b>${o.note}</b></div>`;
   if(o.repName)flds+=`<div class="kv"><span>المندوب</span><b>${o.repName}</b></div>`;
@@ -3200,6 +3258,28 @@ function onA(e){
   else if(a==='repcalall'){S.repCalAll=!S.repCalAll;render();}
   else if(a==='repbox'){const rep=el.dataset.rep,box=el.dataset.box;S.repBoxOpen=(S.repBoxOpen&&S.repBoxOpen.rep===rep&&S.repBoxOpen.box===box)?null:{rep,box};render();}
   else if(a==='repboxxls'){const rows=repBoxRows(el.dataset.rep,el.dataset.box).map(orderToXlsRow);exportRowsToXLS(rows,`${el.dataset.rep}_${REPBOX_LBL[el.dataset.box]}.xlsx`,REPBOX_LBL[el.dataset.box]);}
+  else if(a==='fefoauditxls'){
+    const u=S.user,isAdmin_=['admin','accounts','warehouse','quality'].includes(u.role);
+    const myKeys_=new Set(DB.orders.filter(o=>o.cby===u.username).map(o=>o.ccode+'|'+o.icode));
+    let fefoOrders=DB.orders.filter(o=>o.kind==='withdrawal'&&o.orderType==='amanah'&&o.fefoDispense&&o.fefoDispense.length);
+    if(!isAdmin_)fefoOrders=fefoOrders.filter(o=>myKeys_.has(o.ccode+'|'+o.icode));
+    const rows=[];
+    fefoOrders.forEach(o=>{
+      const defRows=(o.defaultDispense&&o.defaultDispense.length)?o.defaultDispense:[{batch:'',expiry:null,qty:''}];
+      const n=Math.max(defRows.length,o.fefoDispense.length);
+      for(let i=0;i<n;i++){
+        const d=defRows[i]||{},a2=o.fefoDispense[i]||{};
+        rows.push({
+          'العميل':o.cname||o.ccode,'رقم الأوردر':o.inv||o.id,'الصنف':o.iname||o.icode,
+          'Default Batch':d.batch||'','Default Expiry':d.expiry?new Date(d.expiry).toLocaleDateString('ar-EG'):'',
+          'رصيد العميل':o.custBalanceAtDelivery??'',
+          'Actual FEFO Batch':a2.batch||'','Actual Expiry':a2.expiry?new Date(a2.expiry).toLocaleDateString('ar-EG'):'',
+          'Actual Qty':a2.qty??'','تبديل عميل آخر':a2.swapped?'نعم':'لا'
+        });
+      }
+    });
+    exportRowsToXLS(rows,'FEFO_Default_vs_Actual.xlsx','Default vs FEFO');
+  }
   else if(a==='wtype'){S.wtype=el.dataset.wt;render();}
   else if(a==='flt'){if(S.user.role==='admin'||S.user.role==='rep'){S.hflt=el.dataset.stage.split(',');S.hfltLabel=el.dataset.label||'';render();}}
   else if(a==='clf'){S.hflt=null;S.hfltLabel='';render();}
@@ -3554,6 +3634,9 @@ async function doRDlv(id){
     o.retQty=retQty;
     o.dloc=loc||null;
     if(o.kind==='withdrawal'&&o.orderType==='amanah'){
+      // نلتقط "الرصيد قبل الصرف" و"الخطة الافتراضية" (لو اتصرفت من رصيد نفس العميل بس، من غير تبادل) قبل أي تعديل — للمقارنة في التقرير
+      o.custBalanceAtDelivery=gb(o.ccode,o.icode);
+      o.defaultDispense=customerOwnFefoPlan(o.ccode,o.icode,+o.qty).dispense;
       // الخصم الفعلي بيتم بنظام FEFO عبر كل العملاء (أقرب صلاحية بالمخزن ككل)، مع تعويض تلقائي لأي عميل تانِ اتخصم منه
       const plan=planFefoWithdrawal(o.ccode,o.icode,+o.qty);
       applyBalanceOps(plan.balanceOps);
@@ -3974,7 +4057,7 @@ function doXLS(){
   const bd=[['كود العميل','اسم العميل','كود الصنف','اسم الصنف','التشغيلة (Batch)','تاريخ الانتهاء','مسؤول الخدمة/الدكتور','الرصيد (أمانة المخزن)']];
   Object.entries(DB.balances).forEach(([k,qty])=>{
     const parts=k.split('|');const cc=parts[0],ic=parts[1],batch=parts[2]||'';
-    const c=fc(cc);const it=fi(ic);const exp=findExpiry(cc,ic,batch);
+    const c=fc(cc);const it=fi(ic);const exp=batchExpiry(ic,batch)||findExpiry(cc,ic,batch);
     const dEntryOrder=DB.orders.find(o=>o.kind==='addition'&&o.ccode===cc&&o.icode===ic&&o.stage!=='rejected');
     bd.push([cc,c?c.name:'',ic,it?it.name:'',batch||'-',exp||'-',dEntryOrder?u2n(dEntryOrder.cby):'-',qty]);
   });
@@ -3983,7 +4066,7 @@ function doXLS(){
   Object.entries(DB.labBalances).forEach(([k,qty])=>{
     const parts=k.split('|');const labCode=parts[0],cc=parts[1],ic=parts[2],batch=parts[3]||'';
     const lab=DB.labs.find(l=>l.code===labCode);const c=fc(cc);const it=fi(ic);
-    const exp=findExpiry(cc,ic,batch);
+    const exp=batchExpiry(ic,batch)||findExpiry(cc,ic,batch);
     ld.push([cc||'-',c?c.name:'-',lab?lab.name:labCode,ic,it?it.name:'',batch||'-',exp||'-',qty]);
   });
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ld),'أرصدة المعامل');
