@@ -890,6 +890,90 @@ function gb(c,i,b){
   return total;
 }
 
+// ===== محرك الصرف بنظام FEFO عبر كل العملاء (بضاعة الأمانة) =====
+// الفكرة: البضاعة فعليًا واحدة في المخزن؛ الصرف الفعلي لازم يطلع من أقرب تشغيلة صلاحية بغض النظر عن اسم العميل
+// المسجّلة عليه، ثم يتم "تعويض" العميل صاحب التشغيلة المُستخدَمة بكمية مماثلة من تشغيلة العميل الطالب (الأبعد صلاحية عنده)
+// عشان يفضل إجمالي رصيد كل عميل صحيح، مع تحديث توزيع التشغيلات/الصلاحيات ليعكس الواقع الفعلي.
+function batchExpiry(icode,batch){
+  if(!batch||!batch.trim())return null;
+  const found=DB.orders.find(o=>o.kind==='addition'&&o.icode===icode&&(o.batch||'').trim()===batch.trim()&&o.expiry);
+  return found?found.expiry:null;
+}
+function itemGlobalBatches(icode){
+  const rows=[];
+  Object.entries(DB.balances).forEach(([k,v])=>{
+    if(!v||v<=0)return;
+    const p=k.split('|');
+    if(p[1]!==icode)return;
+    rows.push({ccode:p[0],batch:p[2]||'',qty:v,expiry:batchExpiry(icode,p[2]||'')});
+  });
+  rows.sort((a,b)=>{
+    const ea=a.expiry?new Date(a.expiry).getTime():Infinity,eb=b.expiry?new Date(b.expiry).getTime():Infinity;
+    if(ea!==eb)return ea-eb;
+    return (a.batch||'').localeCompare(b.batch||'','ar');
+  });
+  return rows;
+}
+// يبني خطة صرف Q من صنف icode لعميل ccode بنظام FEFO عبر كل العملاء، مع خطوات التبادل/التعويض اللازمة
+function planFefoWithdrawal(ccode,icode,qty){
+  const rows=itemGlobalBatches(icode);
+  // نسخة عمل من تشغيلات العميل الطالب نفسه — الأبعد صلاحية أولاً، لأنها المصدر الطبيعي للتعويض
+  const myDonors=rows.filter(r=>r.ccode===ccode).map(r=>({...r})).sort((a,b)=>{
+    const ea=a.expiry?new Date(a.expiry).getTime():Infinity,eb=b.expiry?new Date(b.expiry).getTime():Infinity;
+    return eb-ea;
+  });
+  const chunks=[];
+  let remaining=qty;
+  for(const row of rows){
+    if(remaining<=0)break;
+    if(row.qty<=0)continue;
+    const take=Math.min(remaining,row.qty);
+    if(take<=0)continue;
+    const ops=[];
+    if(row.ccode===ccode){
+      ops.push({ccode,icode,batch:row.batch,delta:-take});
+      const mrow=myDonors.find(r=>r.batch===row.batch);
+      if(mrow)mrow.qty-=take;
+    } else {
+      ops.push({ccode:row.ccode,icode,batch:row.batch,delta:-take});
+      let need=take;
+      for(const mrow of myDonors){
+        if(need<=0)break;
+        if(mrow.qty<=0)continue;
+        const comp=Math.min(need,mrow.qty);
+        if(comp<=0)continue;
+        ops.push({ccode:row.ccode,icode,batch:mrow.batch,delta:+comp});
+        ops.push({ccode,icode,batch:mrow.batch,delta:-comp});
+        mrow.qty-=comp;need-=comp;
+      }
+    }
+    chunks.push({batch:row.batch,expiry:row.expiry,ownerCcode:row.ccode,qty:take,ops,swapped:row.ccode!==ccode});
+    remaining-=take;
+  }
+  return {chunks,balanceOps:chunks.flatMap(c=>c.ops),dispense:chunks.map(c=>({batch:c.batch,expiry:c.expiry,qty:c.qty,swapped:c.swapped})),fulfilled:remaining<=0,shortfall:Math.max(0,remaining)};
+}
+function applyBalanceOps(ops){
+  (ops||[]).forEach(op=>{
+    const k=bk(op.ccode,op.icode,op.batch);
+    DB.balances[k]=(DB.balances[k]||0)+op.delta;
+    if(Math.abs(DB.balances[k])<1e-9)delete DB.balances[k];
+  });
+}
+// يعكس آخر retQty وحدة من خطة FEFO مسجّلة على أوردر (لحالة الإرجاع الجزئي بعد التسليم) — يبدأ من آخر تشغيلة صُرفت للخلف
+function reverseFefoTail(chunks,retQty){
+  const revOps=[];
+  let remaining=retQty;
+  for(let i=chunks.length-1;i>=0&&remaining>1e-9;i--){
+    const c=chunks[i];
+    const take=Math.min(remaining,c.qty);
+    if(take<=0)continue;
+    const ratio=take/c.qty;
+    (c.ops||[]).forEach(op=>revOps.push({ccode:op.ccode,icode:op.icode,batch:op.batch,delta:-op.delta*ratio}));
+    remaining-=take;
+  }
+  return revOps;
+}
+
 const RLBL={admin:'مدير النظام',data_entry:'مدخل بيانات',accounts:'حسابات العملاء',cars:'السيارات',warehouse:'المخازن',rep:'مندوب توزيع',quality:'إدارة الجودة'};
 const SLBL={draft:'مسودة',pending_accounts:'بانتظار الحسابات',rejected:'مرفوض',pending_cars:'بانتظار السيارات',pending_warehouse:'بانتظار المخازن',pending_rep:'بانتظار المندوب',with_rep:'مع المندوب',delivered:'تم التسليم',approved:'تم الاستلام بالمخزن ✅',
   return_pending_rep:'مرتجع — بانتظار تأكيد المندوب',return_pending_acc:'مرتجع — بانتظار الحسابات',return_pending_wh:'مرتجع — بانتظار استلام المخازن',returned:'تم تأكيد الإرجاع وإضافة الرصيد ✅',
@@ -1814,7 +1898,8 @@ function rSubF(){
     <div class="field"><label>اسم الصنف</label><input name="iname" id="sin" readonly></div>
   </div>
   <div id="sisec" style="margin:-6px 0 10px;"></div><input type="hidden" name="sector" id="sisecval">
-  ${wt==='amanah'?`<div class="field"><label>الباتش المطلوب صرفه</label><select name="batch" id="sbatch" required><option value="">اختر العميل والصنف أولاً...</option></select></div>
+  ${wt==='amanah'?`<div class="field"><label>التشغيلة</label><select name="batch" id="sbatch"><option value="">🔄 تلقائي حسب أقرب صلاحية بالنظام (FEFO)</option></select>
+  <div style="font-size:10.5px;color:var(--muted);margin-top:4px;">الصرف الفعلي بيتحدد تلقائيًا عند التسليم من أقرب تشغيلة صلاحية متاحة بالمخزن ككل (حتى لو كانت مسجّلة لعميل آخر)، مع تعويضه تلقائيًا من رصيد هذا العميل — تقدر تسيبها تلقائي أو تعرض رصيد العميل الحالي بالتشغيلات هنا للمرجعية فقط.</div></div>
   <div id="balbx" class="balbox">أدخل كود العميل والصنف لعرض الرصيد المتاح حالياً</div>`:`<div class="field"><label>الباتش (اختياري)</label><input name="batch" id="sbatch" placeholder="اكتب رقم الباتش (اختياري)"></div>`}
   <div class="field"><label>الكمية المطلوبة</label><input name="qty" type="number" min="1" id="sqty" required></div>
   ${wt==='amanah'?`
@@ -2493,7 +2578,14 @@ function rOrd(){
     <div class="kv"><span>الباتش</span><b>${o.batch||'-'}</b></div>
     ${isAmanah?`<div class="kv"><span>الكونتر / الدور</span><b>${o.counterName||o.counterCode||'-'}</b></div>
     <div class="kv"><span>المعمل الحالي</span><b>🏭 ${o.labName||'-'}</b></div>
-    ${o.labHistory&&o.labHistory.length?`<div class="kv"><span>سجل تحويل المعمل</span><b style="font-size:11px;">${o.labHistory.map(h=>`${h.from}→${h.to}`).join(' | ')}</b></div>`:''}`:''}`;
+    ${o.labHistory&&o.labHistory.length?`<div class="kv"><span>سجل تحويل المعمل</span><b style="font-size:11px;">${o.labHistory.map(h=>`${h.from}→${h.to}`).join(' | ')}</b></div>`:''}
+    ${o.fefoDispense&&o.fefoDispense.length?`<div style="margin-top:8px;background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 12px;">
+      <div style="font-size:11px;font-weight:800;color:var(--blue2);margin-bottom:5px;">📦 توزيع الصرف الفعلي (FEFO)</div>
+      ${o.fefoDispense.map(d=>`<div style="font-size:11px;display:flex;justify-content:space-between;padding:2px 0;">
+        <span>${d.batch||'-'} ${d.expiry?'— صلاحية '+new Date(d.expiry).toLocaleDateString('ar-EG'):''}${d.swapped?' <b style="color:var(--warn);">(تشغيلة عميل آخر — تم التعويض تلقائيًا)</b>':''}</span>
+        <b>${d.qty}</b>
+      </div>`).join('')}
+    </div>`:''}`:''}`;
   }
   if(o.note)flds+=`<div class="kv"><span>ملحوظة</span><b>${o.note}</b></div>`;
   if(o.repName)flds+=`<div class="kv"><span>المندوب</span><b>${o.repName}</b></div>`;
@@ -3204,14 +3296,10 @@ async function onNew(e){
       const hasAdded=DB.orders.some(o=>o.kind==='addition'&&o.cby===u.username&&o.ccode===cc&&o.icode===ic&&o.stage!=='rejected');
       if(!hasAdded){toast('⛔ لا يمكنك الصرف لعميل لم تسجّل له إضافة بنفسك');return;}
     }
-    const batchVal=(f.get('batch')||'').trim();
-    const bal=gb(cc,ic,batchVal);
-    if(bal<=0){
-      const totalBal=gb(cc,ic);
-      if(totalBal<=0){toast('⛔ لا يوجد رصيد متاح لهذا العميل من هذا الصنف');return;}
-      else{toast(`⛔ لا يوجد رصيد للباتش "${batchVal}" — الرصيد الإجمالي ${totalBal}`);return;}
-    }
-    if(qty>bal){toast(`⛔ الكمية (${qty}) أكبر من الرصيد المتاح للباتش (${bal})`);return;}
+    // الصرف الفعلي هيتحدد تلقائيًا بنظام FEFO عند التسليم، فالتحقق هنا يكون على إجمالي رصيد العميل من الصنف (بغض النظر عن التشغيلة)
+    const totalBal=gb(cc,ic);
+    if(totalBal<=0){toast('⛔ لا يوجد رصيد متاح لهذا العميل من هذا الصنف');return;}
+    if(qty>totalBal){toast(`⛔ الكمية (${qty}) أكبر من الرصيد الإجمالي المتاح (${totalBal})`);return;}
   }
   const labCode=(f.get('labCode')||'').trim();
   const counterCode=(f.get('counterCode')||'').trim();
@@ -3374,8 +3462,14 @@ async function doWH(id){
   if(o.stage==='return_pending_wh'){
     if(o.balAdded){toast('⚠️ تمت إضافة هذا الرصيد مسبقاً');return;}
     if(o.orderType==='amanah'){
-      const k=bk(o.ccode,o.icode,o.batch);
-      DB.balances[k]=(DB.balances[k]||0)+(+o.qty);
+      const orig=DB.orders.find(x=>x.id===o.originalId);
+      if(orig&&orig.fefoChunks&&orig.fefoChunks.length){
+        // نعكس بالظبط نفس التشغيلات/العملاء اللي اتأثروا بالجزء ده من الصرف الأصلي (بما فيها أي تعويضات تبادلية)
+        applyBalanceOps(reverseFefoTail(orig.fefoChunks,+o.qty));
+      } else {
+        const k=bk(o.ccode,o.icode,o.batch);
+        DB.balances[k]=(DB.balances[k]||0)+(+o.qty);
+      }
     }
     o.balAdded=true;
     o.stage='returned';
@@ -3460,13 +3554,24 @@ async function doRDlv(id){
     o.retQty=retQty;
     o.dloc=loc||null;
     if(o.kind==='withdrawal'&&o.orderType==='amanah'){
-      const k=bk(o.ccode,o.icode,o.batch);
-      DB.balances[k]=(DB.balances[k]||0)-(+o.qty);
+      // الخصم الفعلي بيتم بنظام FEFO عبر كل العملاء (أقرب صلاحية بالمخزن ككل)، مع تعويض تلقائي لأي عميل تانِ اتخصم منه
+      const plan=planFefoWithdrawal(o.ccode,o.icode,+o.qty);
+      applyBalanceOps(plan.balanceOps);
+      o.fefoChunks=plan.chunks;
+      o.fefoDispense=plan.dispense;
+      o.batch=plan.dispense.map(d=>d.batch).filter(Boolean).join(' + ')||o.batch;
+      o.expiry=plan.dispense[0]?plan.dispense[0].expiry:o.expiry;
       o.balDeducted=true;
-      // البضاعة اللي فعلاً وصلت للعميل تدخل رصيد معمله (مش رصيد المخزن)
+      // البضاعة اللي فعلاً وصلت للعميل تدخل رصيد معمله (مش رصيد المخزن) — موزّعة على نفس تشغيلات خطة الـFEFO
       if(o.labCode&&dlvQty>0){
-        const lk_=lbk(o.labCode,o.ccode,o.icode,o.batch);
-        DB.labBalances[lk_]=(DB.labBalances[lk_]||0)+dlvQty;
+        let remLab=dlvQty;
+        for(const d of plan.dispense){
+          if(remLab<=0)break;
+          const t=Math.min(remLab,d.qty);
+          const lk_=lbk(o.labCode,o.ccode,o.icode,d.batch);
+          DB.labBalances[lk_]=(DB.labBalances[lk_]||0)+t;
+          remLab-=t;
+        }
       }
       // الكونتر: لو خرج مع البضاعة فعلاً ينتقل من رصيد المخزن لرصيد معمل العميل
       if(o.counterCode&&o.counterWithGoods&&o.labCode){
