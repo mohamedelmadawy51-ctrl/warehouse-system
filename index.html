@@ -908,11 +908,16 @@ function itemOpts(sel){
   return items.map(i=>`<option value="${i.code}" ${i.code===sel?'selected':''}>${i.code} — ${i.name}</option>`).join('');
 }
 // ===== كاش لأرصدة الأمانة — يتم بناؤه مرة واحدة فقط ويُعاد بناؤه لما BAL_VERSION يتغيّر، بدل ما نمسح DB.balances بالكامل مع كل نداء =====
-let _balCacheVer=-1, _balByItem=null, _balAgg=null;
+function isExpiredDate(exp){
+  if(!exp)return false; // من غير تاريخ صلاحية معروف: ما نقدرش نجزم إنه منتهي، فنسيبه متاح
+  return new Date(exp).getTime()<new Date().setHours(0,0,0,0);
+}
+let _balCacheVer=-1, _balByItem=null, _balAgg=null, _balAggAvail=null;
 function ensureBalCache(){
   if(_balCacheVer===BAL_VERSION)return;
   _balByItem=new Map(); // icode -> [{ccode,batch,qty}]
-  _balAgg=new Map();    // "ccode|icode" -> total qty
+  _balAgg=new Map();    // "ccode|icode" -> إجمالي الرصيد (شامل المنتهي) — للتقارير فقط
+  _balAggAvail=new Map(); // "ccode|icode" -> الرصيد القابل للصرف فعليًا (غير منتهي الصلاحية)
   Object.entries(DB.balances).forEach(([k,v])=>{
     if(!v)return;
     const p=k.split('|');
@@ -921,6 +926,9 @@ function ensureBalCache(){
     _balByItem.get(ic).push({ccode:cc,batch,qty:v});
     const aggKey=cc+'|'+ic;
     _balAgg.set(aggKey,(_balAgg.get(aggKey)||0)+v);
+    if(!isExpiredDate(batchExpiry(ic,batch))){
+      _balAggAvail.set(aggKey,(_balAggAvail.get(aggKey)||0)+v);
+    }
   });
   _balCacheVer=BAL_VERSION;
 }
@@ -968,7 +976,7 @@ function gb(c,i,b){
     return DB.balances[bk(c,i,b)]||0;
   }
   ensureBalCache();
-  return _balAgg.get(c+'|'+i)||0;
+  return _balAggAvail.get(c+'|'+i)||0;
 }
 
 // ===== محرك الصرف بنظام FEFO عبر كل العملاء (بضاعة الأمانة) =====
@@ -980,9 +988,11 @@ function batchExpiry(icode,batch){
   const found=DB.orders.find(o=>o.kind==='addition'&&o.icode===icode&&(o.batch||'').trim()===batch.trim()&&o.expiry);
   return found?found.expiry:null;
 }
-function itemGlobalBatches(icode){
+function itemGlobalBatches(icode,opts){
+  const excludeExpired=opts&&opts.excludeExpired;
   ensureBalCache();
-  const rows=(_balByItem.get(icode)||[]).filter(r=>r.qty>0).map(r=>({ccode:r.ccode,batch:r.batch,qty:r.qty,expiry:batchExpiry(icode,r.batch)}));
+  let rows=(_balByItem.get(icode)||[]).filter(r=>r.qty>0).map(r=>({ccode:r.ccode,batch:r.batch,qty:r.qty,expiry:batchExpiry(icode,r.batch)}));
+  if(excludeExpired)rows=rows.filter(r=>!isExpiredDate(r.expiry));
   rows.sort((a,b)=>{
     const ea=a.expiry?new Date(a.expiry).getTime():Infinity,eb=b.expiry?new Date(b.expiry).getTime():Infinity;
     if(ea!==eb)return ea-eb;
@@ -991,8 +1001,9 @@ function itemGlobalBatches(icode){
   return rows;
 }
 // يبني خطة صرف Q من صنف icode لعميل ccode بنظام FEFO عبر كل العملاء، مع خطوات التبادل/التعويض اللازمة
+// ملحوظة: التشغيلات منتهية الصلاحية مُستبعَدة تمامًا من الصرف — ما ينفعش نصرف حاجة منتهية لأي عميل
 function planFefoWithdrawal(ccode,icode,qty){
-  const rows=itemGlobalBatches(icode);
+  const rows=itemGlobalBatches(icode,{excludeExpired:true});
   // نسخة عمل من تشغيلات العميل الطالب نفسه — الأبعد صلاحية أولاً، لأنها المصدر الطبيعي للتعويض
   const myDonors=rows.filter(r=>r.ccode===ccode).map(r=>({...r})).sort((a,b)=>{
     const ea=a.expiry?new Date(a.expiry).getTime():Infinity,eb=b.expiry?new Date(b.expiry).getTime():Infinity;
@@ -1031,7 +1042,7 @@ function planFefoWithdrawal(ccode,icode,qty){
 // خطة "افتراضية" (Default/Planned) — أقرب تشغيلة صلاحية عند نفس العميل فقط، من غير أي تبادل مع عملاء آخرين
 // بتُستخدم للمقارنة في التقرير مع الخطة الفعلية (Actual/FEFO) اللي بتاخد بعين الاعتبار كل العملاء
 function customerOwnFefoPlan(ccode,icode,qty){
-  const rows=itemGlobalBatches(icode).filter(r=>r.ccode===ccode);
+  const rows=itemGlobalBatches(icode,{excludeExpired:true}).filter(r=>r.ccode===ccode);
   const dispense=[];let remaining=qty;
   for(const row of rows){
     if(remaining<=0)break;if(row.qty<=0)continue;
@@ -2779,6 +2790,7 @@ function rOrd(){
       </div>
     </div>
     ${(o.fefoDispense.some(d=>d.swapped)||JSON.stringify((o.defaultDispense||[]).map(d=>d.batch))!==JSON.stringify(o.fefoDispense.map(d=>d.batch)))?`<div style="font-size:10.5px;color:var(--warn);font-weight:700;margin-top:5px;">⚠️ اختلف الصرف الفعلي عن الافتراضي بسبب تطبيق FEFO</div>`:''}
+    ${o.fefoShortfall>0?`<div style="font-size:10.5px;color:var(--bad);font-weight:700;margin-top:5px;">⛔ لم يتم توفير ${o.fefoShortfall} من الكمية المطلوبة — باقي الرصيد منتهي الصلاحية ولا يجوز الصرف منه</div>`:''}
     ${o.custBalanceAtDelivery!=null?`<div class="kv" style="margin-top:6px;"><span>رصيد العميل وقت الصرف</span><b>${o.custBalanceAtDelivery}</b></div>`:''}`:''}`:''}`;
   }
   if(o.note)flds+=`<div class="kv"><span>ملحوظة</span><b>${o.note}</b></div>`;
@@ -2999,10 +3011,12 @@ function rAdm(){return`
   <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف · سيارات</div>
   <div class="content">
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
-      <div style="font-weight:800;margin-bottom:6px;">🔗  دخول لمدير النظام فقط</div>
+      <div style="font-weight:800;margin-bottom:6px;">🔗 كيف يدخل زملاؤك على البرنامج؟</div>
       <div style="font-size:12px;line-height:2;color:var(--blue2);">
-         الشركه الدوليه للتبادل التجارى الحر.<br>
-       
+        1. اضغط <b>Share / مشاركة</b> أعلى شات Claude وانسخ الرابط.<br>
+        2. أرسل الرابط للموظف يفتحه من Chrome أو Safari.<br>
+        3. أنشئ له حساب من الأسفل بيوزر وباسورد ودور.<br>
+        4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
       </div>
     </div>
     <div class="slabel">⚙️ نطاق تحميل بيانات الأوردرات</div>
@@ -3805,6 +3819,7 @@ async function doRDlv(id){
       o.batch=plan.dispense.map(d=>d.batch).filter(Boolean).join(' + ')||o.batch;
       o.expiry=plan.dispense[0]?plan.dispense[0].expiry:o.expiry;
       o.balDeducted=true;
+      o.fefoShortfall=plan.shortfall||0;
       // البضاعة اللي فعلاً وصلت للعميل تدخل رصيد معمله (مش رصيد المخزن) — موزّعة على نفس تشغيلات خطة الـFEFO
       if(o.labCode&&dlvQty>0){
         let remLab=dlvQty;
@@ -3841,9 +3856,12 @@ async function doRDlv(id){
       DB.orders.push(ret);
     }
     await svo();await svlb();await svcb();await svco();await svclm();
-    const msg=retQty>0
+    let msg=retQty>0
       ?`✅ تم تسليم ${dlvQty} — أوردر إرجاع تلقائي للكمية المتبقية (${retQty})`
       :'✅ تم التسليم الكامل وتحديث الرصيد';
+    if(o.fefoShortfall>0){
+      msg+=` — ⚠️ تعذّر توفير ${o.fefoShortfall} من الكمية لأن باقي رصيد هذا الصنف منتهي الصلاحية ولا يجوز الصرف منه`;
+    }
     toast(msg);S.tab='home';S.oid=null;render();
   };
 
