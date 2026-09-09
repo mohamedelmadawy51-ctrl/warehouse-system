@@ -70,7 +70,7 @@ input,select,textarea{font-family:inherit;outline:none;}
 .chip{background:var(--blue-lg);color:var(--blue2);font-size:10.5px;font-weight:700;padding:3px 10px;border-radius:999px;}
 
 /* SIGNIN */
-.signin{flex:1;display:flex;flex-direction:column;justify-content:center;padding:36px 24px;overflow-y:auto;}
+.signin{flex:1;display:flex;flex-direction:column;justify-content:center;padding:36px 24px;overflow-y:auto;width:100%;max-width:420px;margin:0 auto;}
 .slogo{width:58px;height:58px;border-radius:16px;background:#fff;padding:6px;margin-bottom:16px;box-shadow:var(--shl);object-fit:contain;border:1px solid var(--line);}
 .signin h2{font-size:22px;font-weight:800;margin-bottom:4px;}
 .signin .sub{color:var(--muted);font-size:13px;margin-bottom:24px;}
@@ -145,9 +145,11 @@ input,select,textarea{font-family:inherit;outline:none;}
 .empty{text-align:center;padding:60px 20px;color:var(--muted);}
 .empty .ic{font-size:36px;margin-bottom:10px;}
 .empty .t{font-weight:800;color:var(--blue);font-size:14px;margin-bottom:4px;}
-.segtog{display:flex;background:#fff;border:1.5px solid var(--line);border-radius:11px;overflow:hidden;margin-bottom:16px;}
-.segtog button{flex:1;padding:13px 0;font-weight:800;font-size:13px;background:#fff;color:var(--muted);}
-.segtog button.on{background:var(--blue);color:#fff;}
+.segtog{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
+.segtog button{flex:1;min-width:140px;padding:13px 14px;font-weight:800;font-size:13px;background:#fff;color:var(--muted);border:1.5px solid var(--line);border-radius:11px;transition:transform .16s var(--ease),box-shadow .2s var(--ease),background .18s,color .18s,border-color .18s;}
+.segtog button.on{background:var(--blue);color:#fff;border-color:var(--blue);}
+@media(hover:hover){.segtog button:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(11,56,102,.12);}}
+.segtog button:active{transform:scale(.97);}
 .slabel{font-size:10.5px;font-weight:800;color:var(--blue2);margin:16px 0 8px;text-transform:uppercase;letter-spacing:.5px;}
 .lkname{font-size:11px;color:var(--ok);margin-top:3px;font-weight:700;min-height:13px;}
 .lkname.miss{color:var(--bad);}
@@ -233,7 +235,8 @@ table.rep th{color:var(--muted);font-weight:800;font-size:10px;background:var(--
 }
 @media print{.tabbar,.topbar,.brow,.pillbar,button,[data-a]{display:none!important;}body{background:#fff;}.content{padding:0;}.card{box-shadow:none;border:1px solid #ddd;page-break-inside:avoid;}}
 @media print{html,body{height:auto!important;overflow:visible!important;}#app{max-width:100%!important;width:100%!important;height:auto!important;overflow:visible!important;}}
-.no-print{}
+.spinner{width:38px;height:38px;border:4px solid var(--blue-lg);border-top-color:var(--blue2);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
 @media print{.no-print{display:none!important;}}
 
 /* MANIFEST — كشف تحرك المندوب (صفحة طباعة مستقلة بالعرض) */
@@ -397,85 +400,60 @@ async function ensureFirebaseAuth(){
   }
 }
 
+// ===== حماية عامة: أي عملية اتصال بقاعدة البيانات لازم تنتهي خلال مهلة معينة، وإلا تفشل برسالة واضحة
+// بدل ما تسيب الشاشة "معلّقة" لغير نهاية (لو حصل بطء في الشبكة أو مشكلة في الاتصال) =====
+function withTimeout(promise, ms=20000, label=''){
+  return Promise.race([
+    promise,
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout'+(label?':'+label:''))), ms))
+  ]);
+}
 async function dbGet(k, fb){
   if(!FDB) return fb;
   try{
-    const snap = await FDB.ref(ROOT+k).once('value');
+    const snap = await withTimeout(FDB.ref(ROOT+k).once('value'), 20000, k);
     const val = snap.val();
     return val !== null ? val : fb;
-  }catch(e){ return fb; }
+  }catch(e){ console.error('Firebase read timeout/error',k,e); return fb; }
 }
 
 async function dbSet(k, v){
   if(!FDB) return;
-  try{ await FDB.ref(ROOT+k).set(v); }catch(e){ console.error('Firebase write error',e); }
+  try{ await withTimeout(FDB.ref(ROOT+k).set(v), 20000, k); }catch(e){ console.error('Firebase write error',e); toast('⚠️ تعذّر الاتصال بقاعدة البيانات — تحقق من الإنترنت وحاول تاني'); }
 }
 
 // ===== تحميل الأوردرات بفلترة تاريخ (بدل تحميل التاريخ كله دفعة واحدة) =====
 // أوردرات "إضافة" (بضاعة الأمانة) بتتحمّل بالكامل دايمًا مهما كان النطاق الزمني،
 // لأن نظام الصرف بطريقة FEFO محتاج يعرف تاريخ صلاحية أي تشغيلة حتى لو كانت أُضيفت من زمان.
 // باقي أنواع الأوردرات (صرف/مرتجع/تحويل...) بتتحمّل فقط لآخر عدد الأيام المحدد لتقليل حجم البيانات المنقولة.
-let DB_ADDITIONS_CACHE=[];
-let DB_RECENT_CACHE=[];
-let ordersAddRef=null, ordersRecentRef=null;
-function mergeOrdersCache(){
-  const map=new Map();
-  DB_ADDITIONS_CACHE.forEach(o=>{if(o&&o.id)map.set(o.id,o);});
-  DB_RECENT_CACHE.forEach(o=>{if(o&&o.id)map.set(o.id,o);});
-  DB.orders=[...map.values()];
-}
-async function fetchOrdersData(days){
+// ملحوظة: تم إلغاء تحميل الأوردرات بفلترة تاريخ لأنها كانت تسبب مشاكل تحميل — بيتم تحميل كل الأوردرات بالكامل الآن،
+// لكن بأمان (كل أوردر بمساره المستقل) عشان الحفظ يفضل سريع وما يمسحش بيانات حتى لو حصل تحسين تدريجي لاحقاً.
+let ordersRef2=null;
+async function fetchOrdersData(){
   if(!FDB)return;
   try{
-    const addSnap=await FDB.ref(ROOT+'ift_orders').orderByChild('kind').equalTo('addition').once('value');
-    const addVal=addSnap.val();
-    DB_ADDITIONS_CACHE=addVal?Object.values(addVal):[];
-  }catch(e){console.error('fetch additions error',e);}
-  try{
-    let q=FDB.ref(ROOT+'ift_orders');
-    if(days)q=q.orderByChild('createdAt').startAt(Date.now()-days*86400000);
-    const snap=await q.once('value');
+    const snap=await FDB.ref(ROOT+'ift_orders').once('value');
     const val=snap.val();
-    DB_RECENT_CACHE=val?Object.values(val):[];
-  }catch(e){console.error('fetch recent orders error',e);}
-  mergeOrdersCache();
+    DB.orders=val?Object.values(val):[];
+  }catch(e){console.error('fetch orders error',e);}
 }
-function attachOrdersListeners(days){
+function attachOrdersListeners(){
   if(!FDB)return;
-  if(ordersAddRef)ordersAddRef.off();
-  if(ordersRecentRef)ordersRecentRef.off();
-  ordersAddRef=FDB.ref(ROOT+'ift_orders').orderByChild('kind').equalTo('addition');
-  ordersAddRef.on('value', snap=>{
-    const val=snap.val();
-    DB_ADDITIONS_CACHE=val?Object.values(val):[];
-    mergeOrdersCache();
-    if(S.screen==='app'&&(S.tab==='home'||S.tab==='rep'||S.tab==='bal'))render();
-  });
-  ordersRecentRef=FDB.ref(ROOT+'ift_orders');
-  if(days)ordersRecentRef=ordersRecentRef.orderByChild('createdAt').startAt(Date.now()-days*86400000);
-  ordersRecentRef.on('value', snap=>{
+  if(ordersRef2)ordersRef2.off();
+  ordersRef2=FDB.ref(ROOT+'ift_orders');
+  ordersRef2.on('value', snap=>{
     const val=snap.val();
     const prevOrders=DB.orders;
-    DB_RECENT_CACHE=val?Object.values(val):[];
-    mergeOrdersCache();
+    DB.orders=val?Object.values(val):[];
     if(S.screen==='app'){
       checkNewTasksNotify(prevOrders,DB.orders);
       if(S.tab==='home'||S.tab==='rep'||S.tab==='bal')render();
     }
   });
 }
-async function setOrdersWindow(days){
-  S.ordersWindowDays=days;
-  if(FDB){
-    await fetchOrdersData(days);
-    attachOrdersListeners(days);
-  }
-  toast(days?`📅 يتم تحميل أوردرات آخر ${days} يوم فقط (بجانب كل الإضافات دايمًا)`:'📅 يتم تحميل كل بيانات الأوردرات بالكامل');
-  render();
-}
 function startRealTimeSync(){
   if(!FDB) return;
-  attachOrdersListeners(S.ordersWindowDays);
+  attachOrdersListeners();
   FDB.ref(ROOT+'ift_balances').on('value', snap=>{
     const val=snap.val();
     if(val!==null){ DB.balances=val; BAL_VERSION++; }
@@ -808,7 +786,7 @@ async function loadDB(){
     ['cars','ift_cars',[]],
   ];
   // نجيب كل المفاتيح مع بعض بالتوازي بدل واحد ورا التاني — بيقلل زمن الدخول بشكل كبير
-  const results=await Promise.all([...keys.map(([,k,fb])=>dbGet(k,fb)),fetchOrdersData(S.ordersWindowDays)]);
+  const results=await Promise.all([...keys.map(([,k,fb])=>dbGet(k,fb)),fetchOrdersData()]);
   keys.forEach(([prop],i)=>{DB[prop]=results[i];});
   if(!FDB){DB.orders=DB.orders||[];} // بدون فايرباس (وضع تجريبي محلي) خلي DB.orders زي ما هي فاضية
 
@@ -850,7 +828,48 @@ async function svclm(){await dbSet('ift_counterLabMeta',DB.counterLabMeta);}
 async function svst(){await dbSet('ift_settings',DB.settings);}
 async function svcar(){await dbSet('ift_cars',DB.cars);}
 let BAL_VERSION=0; // يترفع كل مرة تتغيّر فيها أرصدة الأمانة — بيُستخدم لتفريغ الكاش بدل إعادة حساب كل حاجة من الصفر كل مرة
-async function svo(){await dbSet('ift_orders',DB.orders);await dbSet('ift_balances',DB.balances);BAL_VERSION++;}
+
+// ===== ترحيل تخزين الأوردرات من "مصفوفة واحدة" إلى "عنصر مستقل لكل أوردر بمفتاحه الثابت id" (مرة واحدة فقط) =====
+// السبب: بعد إضافة تحميل الأوردرات بفلترة تاريخ، أي حفظ كان بيستبدل عقدة ift_orders بالكامل بالنسخة المحمّلة محليًا فقط
+// (وهي جزء من البيانات بسبب الفلترة الزمنية)، وده كان بيمسح أي أوردرات قديمة غير محمّلة حاليًا من قاعدة البيانات الفعلية!
+// الحل: كل أوردر بقى له مسار مستقل خاص بيه، وأي حفظ بيحدّث بس الأوردرات المتغيّرة فعليًا بدون ما يلمس الباقي.
+async function migrateOrdersToKeyedFormatIfNeeded(){
+  if(!FDB)return;
+  try{
+    const flagSnap=await withTimeout(FDB.ref(ROOT+'ift_orders_migrated_v2').once('value'),20000,'migrate-flag');
+    if(flagSnap.val()===true)return;
+    const snap=await withTimeout(FDB.ref(ROOT+'ift_orders').once('value'),30000,'migrate-read');
+    const raw=snap.val();
+    if(Array.isArray(raw)){
+      const keyed={};
+      raw.forEach(o=>{if(o&&o.id)keyed[o.id]=o;});
+      await withTimeout(FDB.ref(ROOT+'ift_orders').set(keyed),30000,'migrate-write'); // استبدال آمن هنا فقط لأننا جبنا كل البيانات كاملة بدون أي فلترة قبل الكتابة
+    }
+    await withTimeout(FDB.ref(ROOT+'ift_orders_migrated_v2').set(true),20000,'migrate-flag-set');
+  }catch(e){console.error('orders migration failed/timed out — سيتم المتابعة بدون توقف التطبيق',e);}
+}
+// يحفظ الأوردرات: لو اتحددت أوردرات معينة (dirtyOrders) بيحدّث دول بس بمسارهم المستقل (update وليس set)،
+// وإلا (النداء القديم بدون تحديد) بيحدّث كل الأوردرات المحمّلة محليًا حاليًا — في الحالتين لا يتم مسح أي بيانات
+// أوردرات تانية موجودة في قاعدة البيانات وغير محمّلة حاليًا بسبب فلترة النطاق الزمني.
+async function removeOrderRemote(id){
+  if(FDB){
+    try{await withTimeout(FDB.ref(ROOT+'ift_orders/'+id).remove(),20000,'remove-order');}catch(e){console.error('Firebase order delete error',e);}
+  }
+}
+async function svo(dirtyOrders){
+  let ok=true;
+  if(FDB){
+    try{
+      const list=dirtyOrders?(Array.isArray(dirtyOrders)?dirtyOrders:[dirtyOrders]):DB.orders;
+      const updates={};
+      list.forEach(o=>{if(o&&o.id)updates[o.id]=o;});
+      if(Object.keys(updates).length)await withTimeout(FDB.ref(ROOT+'ift_orders').update(updates),20000,'orders-update');
+    }catch(e){console.error('Firebase orders write error',e);toast('⚠️ تعذّر حفظ التغييرات — تحقق من الإنترنت وحاول تاني');ok=false;}
+  }
+  await dbSet('ift_balances',DB.balances);
+  BAL_VERSION++;
+  return ok;
+}
 function n2bal(loc){return DB.nitrogenBalances[loc]||0;}
 
 // حساب حالة كونتر داخل معمل معيّن: الأيام، نسبة الفقد المتوقعة، الكمية المتبقية، هل يحتاج تزويد
@@ -1106,7 +1125,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,ordersWindowDays:90,pageShow:{},balDetailCust:null};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -1240,6 +1259,8 @@ function parseFlexDate(v){
 async function onXlsFile(e){
   const file=e.target.files[0];if(!file)return;
   if(typeof XLSX==='undefined'){toast('⏳ جارِ تحميل مكتبة Excel — حاول تاني بعد لحظة');return;}
+  toast('⏳ جارِ قراءة الملف... قد يستغرق ثواني لو كان كبير');
+  await new Promise(r=>setTimeout(r,30)); // نسيب المتصفح يرسم رسالة التحميل قبل ما نبدأ معالجة تقيلة على المعالج
   try{
     const buf=await file.arrayBuffer();
     const wb=XLSX.read(buf,{type:'array',cellDates:true});
@@ -1248,7 +1269,9 @@ async function onXlsFile(e){
     const headers=(rows[0]||[]).map(h=>xh(h));
     const dataRows=rows.slice(1).filter(r=>r.some(c=>xh(c)!==''));
     if(!headers.length||!dataRows.length){toast('⚠️ الملف فارغ أو لا يحتوي على بيانات');return;}
+    S.pageShow.xlsPreview=undefined; // تصفير أي ترقيم صفحات متبقي من استيراد سابق
     xlsImp={fileName:file.name,headers,rawRows:dataRows,mapping:xlsAutoMatch(headers),repMap:{},step:'map',parsedRows:null};
+    toast(`✅ تم قراءة ${dataRows.length} صف — راجع مطابقة الأعمدة`);
     render();
   }catch(err){toast('⛔ تعذّرت قراءة الملف — تأكد أنه ملف Excel صحيح (.xlsx / .xls / .csv)');}
 }
@@ -1278,7 +1301,11 @@ async function xlsConfirmImport(){
   const u=S.user;
   const unresolved=Object.entries(xlsImp.repMap).filter(([,v])=>!v);
   if(unresolved.length){toast('⛔ برجاء تحديد حساب المندوب المسجّل مقابل: '+unresolved.map(([k])=>k).join('، '));return;}
+  xlsImp.importing=true;xlsImp.importError=null;render();
+  await new Promise(r=>setTimeout(r,20)); // نسيب المتصفح يرسم شاشة "جارِ الاستيراد" قبل ما نبدأ الشغل
+  try{
   let added=0,dup=0,invalid=0;
+  const newOrders=[];
   xlsImp.parsedRows.forEach(row=>{
     if(!row.ccode||!row.icode||!row.qty||row.qty<=0){invalid++;return;}
     const key=(row.soNo||'')+'|'+row.icode+'|'+(row.batch||'')+'|'+row.ccode+'|'+row.qty;
@@ -1303,13 +1330,48 @@ async function xlsConfirmImport(){
       retDate:row.retDate||'',
       xlsImportKey:key,xlsImportedAt:Date.now(),xlsImportedBy:u.username,xlsFileName:xlsImp.fileName
     };
-    DB.orders.push(o);added++;
+    DB.orders.push(o);newOrders.push(o);added++;
   });
-  if(added>0)await svo();
+  let saveOk=true;
+  if(added>0)saveOk=await svo(newOrders);
+  if(!saveOk){
+    xlsImp.importing=false;
+    xlsImp.importError='فشل حفظ البيانات في قاعدة البيانات (على الأغلب مشكلة اتصال بالإنترنت). الأوردرات لسه موجودة محليًا — جرّب "إعادة المحاولة" تحت.';
+    render();
+    return;
+  }
   toast(`✅ تم استيراد ${added} صنف إلى الأذن المجمع`+(dup?` — تخطي ${dup} مكرر`:'')+(invalid?` — تجاهل ${invalid} صف غير مكتمل`:''));
-  xlsImp=null;S.tab='home';S.oid=null;render();
+  xlsImp=null;S.pageShow.xlsPreview=undefined;S.tab='home';S.oid=null;render();
+  }catch(err){
+    console.error('xlsConfirmImport error',err);
+    if(xlsImp){xlsImp.importing=false;xlsImp.importError=(err&&err.message)?err.message:'حصل خطأ غير متوقع';}
+    render();
+  }
 }
 function rXlsImport(){
+  if(xlsImp&&xlsImp.importing){
+    return `
+    <div style="text-align:center;padding:50px 16px;">
+      <div class="spinner" style="margin:0 auto 18px;"></div>
+      <div style="font-weight:900;font-size:15px;color:var(--blue2);margin-bottom:8px;">⏳ جارِ استيراد البيانات...</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.9;max-width:340px;margin:0 auto;">
+        بيتم حفظ ${xlsImp.parsedRows?xlsImp.parsedRows.length:''} صف في قاعدة البيانات. العملية غالبًا بتاخد ثواني قليلة، لكن ممكن تطول لدقيقة أو أكتر لو الإنترنت بطيء.<br><br>
+        <b style="color:var(--blue2);">من فضلك سيب الصفحة مفتوحة ومتقفلش المتصفح لحد ما تظهر رسالة تأكيد.</b>
+      </div>
+    </div>`;
+  }
+  if(xlsImp&&xlsImp.importError){
+    return `
+    <div style="background:var(--bad-bg);border:1.5px solid var(--bad);border-radius:11px;padding:16px;text-align:center;">
+      <div style="font-size:28px;margin-bottom:8px;">⛔</div>
+      <div style="font-weight:900;color:var(--bad);margin-bottom:6px;">فشلت عملية الاستيراد</div>
+      <div style="font-size:12px;color:var(--bad);line-height:1.8;margin-bottom:14px;">${xlsImp.importError}</div>
+      <div class="brow">
+        <button type="button" class="bs bghost" data-a="xls-cancel">✖ إلغاء والبدء من جديد</button>
+        <button type="button" class="bs bgreen" data-a="xls-confirm">🔄 إعادة المحاولة</button>
+      </div>
+    </div>`;
+  }
   if(!xlsImp){
     return `
     <div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;">
@@ -1338,6 +1400,7 @@ function rXlsImport(){
     const rows=xlsImp.parsedRows;
     const repNames=[...new Set(rows.map(r=>r.rep).filter(Boolean))];
     const repUsers=DB.users.filter(u=>u.role==='rep');
+    const pg=pageSlice(rows,'xlsPreview',50);
     return `
     <div class="slabel">🧍 مطابقة أسماء المناديب بحسابات مسجّلة</div>
     ${repNames.map(rn=>`
@@ -1353,7 +1416,7 @@ function rXlsImport(){
     <div style="overflow-x:auto;">
     <table class="mtbl" style="font-size:11px;">
       <thead><tr><th>الإذن</th><th>العميل</th><th>الصنف</th><th>التشغيلة</th><th>الكمية</th><th>الوحدة</th><th>المندوب</th><th>العربية</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr>
+      <tbody>${pg.rows.map(r=>`<tr>
         <td>${r.soNo||'-'}</td>
         <td>${r.ccode||'-'} — ${r.cname||'-'}</td>
         <td>${r.icode||'-'} — ${r.iname||'-'}</td>
@@ -1364,9 +1427,10 @@ function rXlsImport(){
         <td>${r.carNo||'-'}</td>
       </tr>`).join('')}</tbody>
     </table></div>
+    ${loadMoreBtn('xlsPreview',pg)}
     <div class="brow" style="margin-top:10px;">
       <button type="button" class="bs bghost" data-a="xls-back">◀ رجوع لمطابقة الأعمدة</button>
-      <button type="button" class="bs bgreen" data-a="xls-confirm">✅ تأكيد الاستيراد إلى الأذن المجمع</button>
+      <button type="button" class="bs bgreen" data-a="xls-confirm">✅ تأكيد الاستيراد إلى الأذن المجمع (كل الـ${rows.length} صف)</button>
     </div>`;
   }
   return '';
@@ -1452,6 +1516,12 @@ function prewarmLocation(){
 }
 
 function toast(m){S.toast=m;render();setTimeout(()=>{S.toast='';render();},2400);}
+window.addEventListener('unhandledrejection', ev=>{
+  console.error('Unhandled promise rejection',ev.reason);
+  _actionLock=false;
+  toast('⚠️ حصل خطأ غير متوقع: '+(ev.reason&&ev.reason.message?ev.reason.message:'حاول تاني')+' — لو تكرر ابعتلي رسالة الخطأ دي');
+  ev.preventDefault&&ev.preventDefault();
+});
 function anim(msg,cb){S.anim=msg;render();setTimeout(()=>{S.anim=null;if(cb)cb();render();},2400);}
 
 // يحدد أيقونتي الانطلاق والوصول من نص الرسالة لعمل مشهد منطقي (مكتب → موقف سيارات → مخزن...)
@@ -1474,11 +1544,23 @@ async function init(){
   nightMode=localStorage.getItem(NIGHT_KEY)==='1';applyNight();
   S.screen='welcome';render(); // نعرض شاشة الدخول فورًا من غير ما ننتظر تحميل قاعدة البيانات
   loadWeather();
+  if(IS_CONFIGURED)migrateOrdersToKeyedFormatIfNeeded(); // بدون await — تعمل في الخلفية وميعطلش فتح التطبيق أو أي إجراء تاني
   await loadDB();
   dbReady=true;
   if(IS_CONFIGURED){startRealTimeSync();}
   if(S.screen==='signin')render(); // لو كانت شاشة الدخول متفتحة وقت اكتمال التحميل، نحدّثها
 }
+// لو المتصفح رجّع الصفحة من "Back-Forward Cache" (بيحصل لما التاب يتعلّق في الخلفية لفترة أو عند التنقل بين الصفحات)،
+// اتصال Firebase المباشر (WebSocket) بيتقفل من غير ما نلاحظ، وأي عملية بعد كده هتفضل "معلّقة" لغير نهاية.
+// الحل الأضمن: نعمل تحديث كامل للصفحة عشان نضمن اتصال نظيف وسليم من جديد، بدل ما نحاول نصلّح اتصال ميت.
+window.addEventListener('pageshow', (ev)=>{
+  if(ev.persisted){ location.reload(); }
+});
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible'&&_actionLock){
+    _actionLock=false; // لو التاب رجع من الخلفية وكان فيه إجراء "معلّق" وقتها، نفكّه بدل ما يفضل قافل لغير نهاية
+  }
+});
 init();
 
 function render(){
@@ -1940,7 +2022,7 @@ async function onConsume(e){
   const o={id:uid('cs'),kind:'consumption',stage:'done',cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
     schedDate:(f.get('schedDate')||'').trim()||ymd(Date.now()),
     ccode:cc,cname:f.get('cn'),labCode,labName:lab.name,icode:ic,iname:f.get('iname'),batch,qty,note:f.get('note')};
-  DB.orders.push(o);await svo();
+  DB.orders.push(o);await svo(o);
   toast(`✅ تم تسجيل استهلاك ${qty} وخصمها من رصيد المعمل`);e.target.reset();render();
 }
 
@@ -3021,16 +3103,6 @@ function rAdm(){return`
         4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
       </div>
     </div>
-    <div class="slabel">⚙️ نطاق تحميل بيانات الأوردرات</div>
-    <div class="card">
-      <div style="font-size:11.5px;color:var(--muted);margin-bottom:8px;line-height:1.8;">
-        لتسريع فتح البرنامج مع كبر حجم البيانات، تقدر تحدد آخر كام يوم يتم تحميلهم. أوردرات "إضافة الأمانة" بتتحمّل بالكامل دايمًا (ضرورية لحساب الصلاحيات بنظام FEFO)، والباقي (صرف/مرتجع...) بيتحدد حسب اختيارك هنا.
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        ${[[30,'آخر 30 يوم'],[90,'آخر 90 يوم'],[365,'آخر سنة'],[0,'كل البيانات']].map(([d,l])=>`<button type="button" class="bs ${(S.ordersWindowDays||0)===d?'bgo':'bghost'}" data-a="ordwin" data-days="${d}">${l}</button>`).join('')}
-      </div>
-      <div style="font-size:10.5px;color:var(--muted);margin-top:6px;">النطاق الحالي: <b style="color:var(--blue2);">${S.ordersWindowDays?('آخر '+S.ordersWindowDays+' يوم'):'كل البيانات'}</b> — عدد الأوردرات المحمّلة حاليًا: ${DB.orders.length}</div>
-    </div>
     <div class="slabel">إضافة مستخدم</div>
     <form id="auf">
       <div class="row2"><div class="field"><label>الاسم الكامل</label><input name="name" required></div><div class="field"><label>اسم المستخدم</label><input name="un" required></div></div>
@@ -3387,6 +3459,16 @@ async function onCarPhoto(e){
 }
 
 function onA(e){
+  try{
+    onAInner(e);
+  }catch(err){
+    console.error('onA error',err);
+    toast('⚠️ حصل خطأ غير متوقع: '+(err&&err.message?err.message:'')+' — حاول تاني، ولو تكرر ابعتلي رسالة الخطأ دي');
+    _actionLock=false;
+    render();
+  }
+}
+function onAInner(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
   const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail']);
@@ -3417,9 +3499,8 @@ function onA(e){
   else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;if(el.dataset.type!=='excel_import')xlsImp=null;render();}
   else if(a==='xls-continue'){xlsContinueToPreview();}
   else if(a==='xls-back'){if(xlsImp)xlsImp.step='map';render();}
-  else if(a==='xls-cancel'){xlsImp=null;render();}
+  else if(a==='xls-cancel'){xlsImp=null;S.pageShow.xlsPreview=undefined;render();}
   else if(a==='repcalall'){S.repCalAll=!S.repCalAll;render();}
-  else if(a==='ordwin'){setOrdersWindow(+el.dataset.days||0);}
   else if(a==='loadmore'){const key=el.dataset.key,size=+el.dataset.size||50;S.pageShow[key]=(S.pageShow[key]||size)+size;render();}
   else if(a==='baldetail'){S.balDetailCust=el.dataset.cc;render();}
   else if(a==='back-baldetail'){S.balDetailCust=null;render();}
@@ -3580,7 +3661,7 @@ async function onNew(e){
     sector,sectorName:sname(sector)};
   if(pendAtt)o.att=pendAtt;
   // *** الرصيد لا يُضاف هنا — يُضاف فقط عندما يؤكد المخزن استلام البضاعة (ولا يُضاف نهائياً للأوردر العادي) ***
-  DB.orders.push(o);await svo();pendAtt=null;
+  DB.orders.push(o);await svo(o);pendAtt=null;
   anim('جارِ الإرسال إلى حسابات العملاء',()=>{S.tab='home';S.oid=null;});
 }
 
@@ -3634,7 +3715,7 @@ async function onTrf(e){
     icode:wantsGoods?ic:'',iname:wantsGoods?f.get('iname'):'',batch:wantsGoods?batch:'',qty:wantsGoods?qty:0,
     counterCode:wantsCounter?counterCode:'',counterName:wantsCounter?cnname(counterCode):'',counterQty:wantsCounter?counterQty:0,
     note:f.get('note')};
-  DB.orders.push(o);await svo();
+  DB.orders.push(o);await svo(o);
   const parts=[];
   if(wantsGoods)parts.push(`${qty} من البضاعة`);
   if(wantsCounter)parts.push(`${counterQty} كونتر`);
@@ -3658,12 +3739,12 @@ async function onCars(e){
   o.driverPhoto=(drvUser&&drvUser.photo)?drvUser.photo:'';
   o.stage=(o.kind==='customer_return')?'customer_return_pending_wh':'pending_warehouse';
   o.updAt=Date.now();
-  await svo();anim('جارِ الإرسال إلى المخازن',()=>{S.tab='home';S.oid=null;});
+  await svo(o);anim('جارِ الإرسال إلى المخازن',()=>{S.tab='home';S.oid=null;});
 }
 
 async function doFwd(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
-  o.stage='pending_accounts';o.updAt=Date.now();await svo();
+  o.stage='pending_accounts';o.updAt=Date.now();await svo(o);
   anim('جارِ الإرسال إلى حسابات العملاء',()=>{S.tab='home';S.oid=null;});
 }
 
@@ -3675,31 +3756,31 @@ async function doAppr(id){
     DB.balances[bk(o.fcc,o.icode,o.batch)]=(DB.balances[bk(o.fcc,o.icode,o.batch)]||0)-(+o.qty);
     DB.balances[bk(o.tcc,o.icode,o.batch)]=(DB.balances[bk(o.tcc,o.icode,o.batch)]||0)+(+o.qty);
     o.stage='approved';
-    o.updAt=Date.now();await svo();
+    o.updAt=Date.now();await svo(o);
     toast('✅ تم تنفيذ التحويل وتحديث الأرصدة');S.tab='home';S.oid=null;render();
     return;
   }
   if(o.kind==='return'&&o.stage==='return_pending_acc'){
     // مرتجع كمية لم تُسلَّم من فاتورة صرف جزئي: بعد موافقة الحسابات → المخازن للتأكيد النهائي وإضافة الرصيد
-    o.stage='return_pending_wh';o.updAt=Date.now();await svo();
+    o.stage='return_pending_wh';o.updAt=Date.now();await svo(o);
     anim('تمت الموافقة — جارِ الإرسال للمخازن للتأكيد',()=>{S.tab='home';S.oid=null;});
     return;
   }
   if(o.kind==='customer_return'&&o.stage==='customer_return_pending_acc'){
     // سحب بضاعة من عميل بطلب من مدخل البيانات: بعد موافقة الحسابات → السيارات
-    o.stage='customer_return_pending_cars';o.updAt=Date.now();await svo();
+    o.stage='customer_return_pending_cars';o.updAt=Date.now();await svo(o);
     anim('تمت الموافقة — جارِ الإرسال لقسم السيارات',()=>{S.tab='home';S.oid=null;});
     return;
   }
   if(o.kind==='addition'){
     // الإضافة: بعد موافقة الحسابات تذهب مباشرة للمخازن (بدون سيارات أو مندوب)
     o.stage='pending_warehouse';
-    o.updAt=Date.now();await svo();
+    o.updAt=Date.now();await svo(o);
     anim('تمت الموافقة — جارِ الإرسال للمخازن',()=>{S.tab='home';S.oid=null;});
   } else {
     // الصرف: بعد موافقة الحسابات يذهب للسيارات كالمعتاد
     o.stage='pending_cars';
-    o.updAt=Date.now();await svo();
+    o.updAt=Date.now();await svo(o);
     anim('تمت الموافقة — جارِ الإرسال لقسم السيارات',()=>{S.tab='home';S.oid=null;});
   }
 }
@@ -3708,7 +3789,7 @@ async function doRej(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
   const rsn=prompt('سبب الرفض:')||'بدون سبب';
   // لا نعدّل الرصيد لأنه لم يُضَف أصلاً قبل موافقة المخزن
-  o.stage='rejected';o.rejectReason=rsn;o.updAt=Date.now();await svo();
+  o.stage='rejected';o.rejectReason=rsn;o.updAt=Date.now();await svo(o);
   toast('تم رفض الطلب');S.tab='home';S.oid=null;render();
 }
 
@@ -3729,7 +3810,7 @@ async function doWH(id){
     }
     o.balAdded=true;
     o.stage='returned';
-    o.updAt=Date.now();await svo();
+    o.updAt=Date.now();await svo(o);
     anim(o.orderType!=='amanah'?'✅ تم تأكيد استلام المرتجع بالمخزن':'✅ تم تأكيد الاستلام بالمخزن وإضافة الرصيد للعميل',()=>{S.tab='home';S.oid=null;});
     return;
   }
@@ -3750,7 +3831,7 @@ async function doWH(id){
     }
     o.balAdded=true;
     o.stage='customer_returned';
-    o.updAt=Date.now();await svo();if(fromLab)await svlb();
+    o.updAt=Date.now();await svo(o);if(fromLab)await svlb();
     anim(fromLab?'✅ تم استلام السحوبات وإرجاعها لأمانة المخزن':'✅ تم تأكيد استلام السحوبات بالمخزن وخصم الرصيد',()=>{S.tab='home';S.oid=null;});
     return;
   }
@@ -3762,7 +3843,7 @@ async function doWH(id){
     if(counterObj){counterObj.status='فارغ';}
     o.balAdded=true;
     o.stage='counter_returned';
-    o.updAt=Date.now();await svo();await svcb();await svco();
+    o.updAt=Date.now();await svo(o);await svcb();await svco();
     await logCounterMove(o.counterCode,'رجوع للمخزن (تأكيد)',o.qty,'في الطريق','المخزن',0,'');
     anim('✅ تم تأكيد استلام الكونتر بالمخزن',()=>{S.tab='home';S.oid=null;});
     return;
@@ -3772,10 +3853,10 @@ async function doWH(id){
     const k=bk(o.ccode,o.icode,o.batch);
     DB.balances[k]=(DB.balances[k]||0)+(+o.qty);
     o.balAdded=true;
-    o.stage='approved';o.updAt=Date.now();await svo();
+    o.stage='approved';o.updAt=Date.now();await svo(o);
     anim('✅ تم الاستلام بالمخزن وإضافة الرصيد للعميل',()=>{S.tab='home';S.oid=null;});
   } else {
-    o.stage='pending_rep';o.updAt=Date.now();await svo();
+    o.stage='pending_rep';o.updAt=Date.now();await svo(o);
     anim('جارِ الإرسال للمندوب',()=>{S.tab='home';S.oid=null;});
   }
 }
@@ -3783,7 +3864,7 @@ async function doWH(id){
 async function doRepRet(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
   if(o.stage!=='return_pending_rep')return;
-  o.stage='return_pending_acc';o.updAt=Date.now();await svo();
+  o.stage='return_pending_acc';o.updAt=Date.now();await svo(o);
   anim('🔁 تم تأكيد الإرجاع — جارِ الإرسال للحسابات',()=>{S.tab='home';S.oid=null;});
 }
 
@@ -3791,7 +3872,7 @@ async function doRRcv(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
   o.stage='with_rep';o.updAt=Date.now();
   o.repReceivedAt=Date.now();o.repReceivedBy=S.user.name;
-  await svo();
+  await svo(o);
   toast('✅ تم تأكيد الاستلام — الطلب الآن معك في الرئيسية');
   S.tab='home';S.oid=null;render();
 }
@@ -3846,8 +3927,9 @@ async function doRDlv(id){
       }
     }
     // لو تسليم جزئي → أنشئ أوردر إرجاع تلقائياً (يبدأ بتأكيد المندوب ثم الحسابات ثم المخازن) — نفس الطريقة تنطبق على الأوردر العادي (SMS) أيضاً، مع عدم لمس رصيد الأمانة له عند التأكيد النهائي
+    let ret=null;
     if(retQty>0){
-      const ret={
+      ret={
         id:uid('ret'),kind:'return',stage:'return_pending_rep',
         cby:o.cby,cbyn:o.cbyn,createdAt:Date.now(),updAt:Date.now(),
         ccode:o.ccode,cname:o.cname,icode:o.icode,iname:o.iname,
@@ -3857,7 +3939,7 @@ async function doRDlv(id){
       };
       DB.orders.push(ret);
     }
-    await svo();await svlb();await svcb();await svco();await svclm();
+    await svo(ret?[o,ret]:o);await svlb();await svcb();await svco();await svclm();
     let msg=retQty>0
       ?`✅ تم تسليم ${dlvQty} — أوردر إرجاع تلقائي للكمية المتبقية (${retQty})`
       :'✅ تم التسليم الكامل وتحديث الرصيد';
@@ -4018,7 +4100,7 @@ async function doQC(id){
   const qcs=document.getElementById('qcs'),qcn=document.getElementById('qcn');
   o.qcStatus=qcs?qcs.value:'';o.qcNote=qcn?qcn.value:'';
   o.qcBy=S.user.name;o.qcAt=Date.now();
-  await svo();toast('✅ تم حفظ ملاحظة الجودة');render();
+  await svo(o);toast('✅ تم حفظ ملاحظة الجودة');render();
 }
 
 async function doSaveSettings(){
@@ -4120,7 +4202,7 @@ async function onCounterReturn(e){
     ccode:labCodes(lab)[0]||'',cname:labCustNames(lab),labCode,labName:lab.name,
     counterCode:counter.code,counterName:cnname(counter.code),qty,
     note:'استرجاع كونتر من معمل '+lab.name};
-  DB.orders.push(o);await svo();
+  DB.orders.push(o);await svo(o);
   toast('✅ تم بدء دورة استرجاع الكونتر — بانتظار تأكيد المخزن');e.target.reset();render();
 }
 
@@ -4158,7 +4240,7 @@ async function doCustReturn(id){
     repName:o.repName,originalId:id,sourcePool,labCode:sourcePool==='lab'?o.labCode:'',labName:sourcePool==='lab'?o.labName:'',
     note:'سحوبات بطلب '+u2n(o.cby)+' — من الأوردر: '+(o.inv||id)+' ('+poolLabel+')'
   };
-  DB.orders.push(ret);await svo();
+  DB.orders.push(ret);await svo(ret);
   toast('✅ تم فتح طلب سحوبات وإرساله للحسابات');S.tab='home';S.oid=null;render();
 }
 function u2n(username){const u=DB.users.find(x=>x.username===username);return u?u.name:username;}
@@ -4180,6 +4262,7 @@ async function doCancel(id){
     DB.balances[k]=(DB.balances[k]||0)+(+o.qty);
   }
   DB.orders=DB.orders.filter(x=>x.id!==id);
+  await removeOrderRemote(id);
   await svo();toast('✅ تم إلغاء العملية وحذفها من السجلات');S.tab='home';S.oid=null;render();
 }
 
