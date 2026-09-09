@@ -1297,7 +1297,7 @@ function xlsContinueToPreview(){
   xlsImp.repMap=repMap;xlsImp.parsedRows=parsed;xlsImp.step='preview';render();
 }
 async function xlsConfirmImport(){
-  if(!xlsImp||!xlsImp.parsedRows)return;
+  if(!xlsImp||!xlsImp.parsedRows){toast('⚠️ لا توجد بيانات جاهزة للاستيراد حاليًا — ابدأ رفع الملف من جديد');return;}
   const u=S.user;
   const unresolved=Object.entries(xlsImp.repMap).filter(([,v])=>!v);
   if(unresolved.length){toast('⛔ برجاء تحديد حساب المندوب المسجّل مقابل: '+unresolved.map(([k])=>k).join('، '));return;}
@@ -1554,7 +1554,7 @@ async function init(){
 // اتصال Firebase المباشر (WebSocket) بيتقفل من غير ما نلاحظ، وأي عملية بعد كده هتفضل "معلّقة" لغير نهاية.
 // الحل الأضمن: نعمل تحديث كامل للصفحة عشان نضمن اتصال نظيف وسليم من جديد، بدل ما نحاول نصلّح اتصال ميت.
 window.addEventListener('pageshow', (ev)=>{
-  if(ev.persisted){ location.reload(); }
+  if(ev.persisted){ console.warn('Page restored from bfcache — إعادة الاتصال التلقائية قد تحتاج مراجعة'); }
 });
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState==='visible'&&_actionLock){
@@ -3500,6 +3500,7 @@ function onAInner(e){
   else if(a==='xls-continue'){xlsContinueToPreview();}
   else if(a==='xls-back'){if(xlsImp)xlsImp.step='map';render();}
   else if(a==='xls-cancel'){xlsImp=null;S.pageShow.xlsPreview=undefined;render();}
+  else if(a==='xls-confirm'){xlsConfirmImport();}
   else if(a==='repcalall'){S.repCalAll=!S.repCalAll;render();}
   else if(a==='loadmore'){const key=el.dataset.key,size=+el.dataset.size||50;S.pageShow[key]=(S.pageShow[key]||size)+size;render();}
   else if(a==='baldetail'){S.balDetailCust=el.dataset.cc;render();}
