@@ -224,10 +224,13 @@ table.rep th{color:var(--muted);font-weight:800;font-size:10px;background:var(--
 @media(min-width:900px){
   #app{max-width:none;width:96vw;}
   .grid2,.grid3{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
-  .row2{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:22px;}
+  .row2{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;}
   .grid2,.grid3{gap:16px;}
-  .field{margin-bottom:18px;}
+  .field{margin-bottom:13px;}
+  .field label{font-size:11.5px;}
+  .field input,.field select,.field textarea{padding:9px 12px;font-size:13px;border-radius:8px;}
   .content{padding:10px 40px 28px;}
+  #nf,#cnsf,.form-narrow{max-width:640px;}
 }
 @media(min-width:1400px){
   #app{width:94vw;}
@@ -1166,6 +1169,106 @@ const XLS_IMPORT_FIELDS=[
   {key:'retDate',label:'تاريخ العودة',required:false,aliases:['العودة','تاريخ العودة']},
 ];
 let xlsImp=null; // {fileName,headers,rawRows,mapping,repMap,step,parsedRows}
+
+// ===== استيراد بيانات أساسية دفعة واحدة (أصناف + عملاء + سائقين) من ملف إكسيل واحد =====
+let mdImp=null; // {fileName,drivers,items,customers,step,importing,importError}
+function parseMasterDataRows(rows){
+  const specs=[
+    {key:'drvId',aliases:['driv. id','driv id','driver id','كود السائق','معرف السائق']},
+    {key:'drvName',aliases:['driver name','اسم السائق','اسم المندوب']},
+    {key:'drvPhone',aliases:['phone','تليفون','موبايل','رقم الهاتف']},
+    {key:'itmCode',aliases:['كود الصنف']},
+    {key:'itmName',aliases:['اسم الصنف']},
+    {key:'itmSector',aliases:['القطاع (site)','القطاع','site']},
+    {key:'custCode',aliases:['customer account','كود العميل']},
+    {key:'custName',aliases:['name','اسم العميل']},
+  ];
+  let headerRow=-1;
+  const colIdx={};
+  for(let r=0;r<Math.min(rows.length,15);r++){
+    const row=rows[r]||[];
+    let foundAny=false;
+    row.forEach((cell,c)=>{
+      const t=xh(String(cell||'')).toLowerCase();
+      if(!t)return;
+      for(const spec of specs){
+        if(colIdx[spec.key]!=null)continue;
+        if(spec.aliases.some(a=>t===a.toLowerCase())){colIdx[spec.key]=c;foundAny=true;}
+      }
+    });
+    if(foundAny){headerRow=r;break;}
+  }
+  const drivers=[],items=[],customers=[];
+  if(headerRow<0)return{drivers,items,customers,headerFound:false};
+  for(let r=headerRow+1;r<rows.length;r++){
+    const row=rows[r]||[];
+    const g=k=>colIdx[k]!=null?xh(String(row[colIdx[k]]||'')):'';
+    if(colIdx.drvName!=null){const name=g('drvName');if(name)drivers.push({id:g('drvId'),name,phone:g('drvPhone')});}
+    if(colIdx.itmCode!=null){const code=g('itmCode');if(code)items.push({code,name:g('itmName'),sector:g('itmSector')});}
+    if(colIdx.custCode!=null){const code=g('custCode');if(code)customers.push({code,name:g('custName')});}
+  }
+  return{drivers,items,customers,headerFound:true};
+}
+async function onMasterDataFile(e){
+  const file=e.target.files[0];if(!file)return;
+  if(typeof XLSX==='undefined'){toast('⏳ جارِ تحميل مكتبة Excel — حاول تاني بعد لحظة');return;}
+  toast('⏳ جارِ قراءة الملف...');
+  await new Promise(r=>setTimeout(r,30));
+  try{
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array',cellDates:true});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''});
+    const parsed=parseMasterDataRows(rows);
+    if(!parsed.headerFound||(!parsed.drivers.length&&!parsed.items.length&&!parsed.customers.length)){
+      toast('⚠️ لم يتم التعرف على أعمدة معروفة بالملف — راجع أسماء عناوين الأعمدة');
+      return;
+    }
+    mdImp={fileName:file.name,...parsed,step:'preview',importing:false,importError:null};
+    toast(`✅ تم التعرف على ${parsed.drivers.length} سائق، ${parsed.items.length} صنف، ${parsed.customers.length} عميل`);
+    render();
+  }catch(err){console.error('master data parse error',err);toast('⛔ تعذّرت قراءة الملف — تأكد أنه ملف Excel صحيح');}
+}
+async function mdConfirmImport(){
+  if(!mdImp)return;
+  mdImp.importing=true;mdImp.importError=null;render();
+  await new Promise(r=>setTimeout(r,20));
+  try{
+    let itemsNew=0,itemsUpd=0,custNew=0,custUpd=0,drvNew=0,drvUpd=0,sectorsNew=0;
+    const sectorNames=[...new Set(mdImp.items.map(i=>i.sector).filter(Boolean))];
+    sectorNames.forEach(sn=>{
+      if(!DB.sectors.some(s=>xh(s.name)===xh(sn))){DB.sectors.push({code:sn,name:sn});sectorsNew++;}
+    });
+    mdImp.items.forEach(it=>{
+      const sectorRec=DB.sectors.find(s=>xh(s.name)===xh(it.sector));
+      const existing=DB.items.find(x=>x.code===it.code);
+      if(existing){existing.name=it.name||existing.name;existing.sector=sectorRec?sectorRec.code:existing.sector;itemsUpd++;}
+      else{DB.items.push({code:it.code,name:it.name||'',unit:'',sector:sectorRec?sectorRec.code:'',needsCounter:false});itemsNew++;}
+    });
+    mdImp.customers.forEach(c=>{
+      const existing=DB.customers.find(x=>x.code===c.code);
+      if(existing){existing.name=c.name||existing.name;custUpd++;}
+      else{DB.customers.push({code:c.code,name:c.name||''});custNew++;}
+    });
+    mdImp.drivers.forEach(d=>{
+      const un='rep'+(d.id||d.name).toString().replace(/\s+/g,'');
+      const existing=DB.users.find(x=>x.username===un);
+      if(existing){existing.name=d.name||existing.name;existing.phone=d.phone||existing.phone;drvUpd++;}
+      else{
+        const pwd=(d.phone||'').replace(/\D/g,'').slice(-4)||'1234';
+        DB.users.push({username:un,password:pwd,name:d.name,role:'rep',active:true,phone:d.phone||''});
+        drvNew++;
+      }
+    });
+    await Promise.all([svs(),svi(),svc(),svu()]);
+    toast(`✅ تم الاستيراد — أصناف: ${itemsNew} جديد/${itemsUpd} تحديث · عملاء: ${custNew} جديد/${custUpd} تحديث · سائقين: ${drvNew} جديد/${drvUpd} تحديث${sectorsNew?` · ${sectorsNew} قطاع جديد`:''}`);
+    mdImp=null;S.pageShow.mdCustPreview=undefined;S.pageShow.mdItemPreview=undefined;render();
+  }catch(err){
+    console.error('mdConfirmImport error',err);
+    if(mdImp){mdImp.importing=false;mdImp.importError=(err&&err.message)?err.message:'حصل خطأ غير متوقع';}
+    render();
+  }
+}
 function xh(s){return (s||'').toString().trim().replace(/\s+/g,' ');}
 // فلترة أوردرات مندوب معيّن حسب يوم محدد (كاليندر) و/أو نص بحث (رقم الإذن/العميل/الصنف) — تُستخدم في تقرير المندوبين والأذن المجمع معاً
 function repOrdsFiltered(rn){
@@ -1347,6 +1450,64 @@ async function xlsConfirmImport(){
     if(xlsImp){xlsImp.importing=false;xlsImp.importError=(err&&err.message)?err.message:'حصل خطأ غير متوقع';}
     render();
   }
+}
+function rMasterDataImport(){
+  if(mdImp&&mdImp.importing){
+    return `<div style="text-align:center;padding:40px 16px;">
+      <div class="spinner" style="margin:0 auto 18px;"></div>
+      <div style="font-weight:900;font-size:15px;color:var(--blue2);margin-bottom:8px;">⏳ جارِ استيراد البيانات الأساسية...</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.9;max-width:340px;margin:0 auto;">
+        بيتم حفظ ${mdImp.items.length} صنف و${mdImp.customers.length} عميل و${mdImp.drivers.length} سائق. ممكن ياخد دقيقة أو أكتر حسب سرعة الإنترنت خصوصًا لو عدد العملاء كبير.<br><br>
+        <b style="color:var(--blue2);">من فضلك سيب الصفحة مفتوحة لحد ما تظهر رسالة تأكيد.</b>
+      </div>
+    </div>`;
+  }
+  if(mdImp&&mdImp.importError){
+    return `<div style="background:var(--bad-bg);border:1.5px solid var(--bad);border-radius:11px;padding:16px;text-align:center;">
+      <div style="font-size:28px;margin-bottom:8px;">⛔</div>
+      <div style="font-weight:900;color:var(--bad);margin-bottom:6px;">فشلت عملية الاستيراد</div>
+      <div style="font-size:12px;color:var(--bad);line-height:1.8;margin-bottom:14px;">${mdImp.importError}</div>
+      <div class="brow">
+        <button type="button" class="bs bghost" data-a="md-cancel">✖ إلغاء</button>
+        <button type="button" class="bs bgreen" data-a="md-confirm">🔄 إعادة المحاولة</button>
+      </div>
+    </div>`;
+  }
+  if(!mdImp){
+    return `
+    <div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;">
+      ℹ️ ملف واحد فيه 3 أقسام: السائقين (Driv. ID / Driver Name / Phone)، الأصناف (كود الصنف / اسم الصنف / القطاع)، العملاء (Name / Customer account). أي عنصر برقم/كود موجود بالفعل هيتحدّث، والجديد هيتضاف — تقدر ترفع نفس الملف تاني في أي وقت للتحديث.
+    </div>
+    <label class="attachbtn" for="mdFileInput">📎 اختيار ملف Excel</label>
+    <input type="file" id="mdFileInput" accept=".xlsx,.xls,.csv" style="display:none;">`;
+  }
+  if(mdImp.step==='preview'){
+    const itPg=pageSlice(mdImp.items,'mdItemPreview',30);
+    const cuPg=pageSlice(mdImp.customers,'mdCustPreview',30);
+    return `
+    <div class="slabel">🧍 السائقين/المناديب (${mdImp.drivers.length})</div>
+    <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
+      <thead><tr><th>الكود</th><th>الاسم</th><th>الهاتف</th></tr></thead>
+      <tbody>${mdImp.drivers.map(d=>`<tr><td>${d.id||'-'}</td><td>${d.name}</td><td>${d.phone||'-'}</td></tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--muted);">لا يوجد</td></tr>'}</tbody>
+    </table></div>
+    <div class="slabel" style="margin-top:14px;">📦 الأصناف (${mdImp.items.length})</div>
+    <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
+      <thead><tr><th>الكود</th><th>الاسم</th><th>القطاع</th></tr></thead>
+      <tbody>${itPg.rows.map(i=>`<tr><td>${i.code}</td><td>${i.name}</td><td>${i.sector||'-'}</td></tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--muted);">لا يوجد</td></tr>'}</tbody>
+    </table></div>
+    ${loadMoreBtn('mdItemPreview',itPg)}
+    <div class="slabel" style="margin-top:14px;">🏢 العملاء (${mdImp.customers.length})</div>
+    <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
+      <thead><tr><th>الكود</th><th>الاسم</th></tr></thead>
+      <tbody>${cuPg.rows.map(c=>`<tr><td>${c.code}</td><td>${c.name}</td></tr>`).join('')||'<tr><td colspan="2" style="text-align:center;color:var(--muted);">لا يوجد</td></tr>'}</tbody>
+    </table></div>
+    ${loadMoreBtn('mdCustPreview',cuPg)}
+    <div class="brow" style="margin-top:14px;">
+      <button type="button" class="bs bghost" data-a="md-cancel">✖ إلغاء</button>
+      <button type="button" class="bs bgreen" data-a="md-confirm">✅ تأكيد الاستيراد (${mdImp.drivers.length + mdImp.items.length + mdImp.customers.length} سطر)</button>
+    </div>`;
+  }
+  return '';
 }
 function rXlsImport(){
   if(xlsImp&&xlsImp.importing){
@@ -3103,6 +3264,10 @@ function rAdm(){return`
         4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
       </div>
     </div>
+    <div class="slabel">📥 استيراد بيانات أساسية (أصناف / عملاء / سائقين)</div>
+    <div class="card">
+      ${rMasterDataImport()}
+    </div>
     <div class="slabel">إضافة مستخدم</div>
     <form id="auf">
       <div class="row2"><div class="field"><label>الاسم الكامل</label><input name="name" required></div><div class="field"><label>اسم المستخدم</label><input name="un" required></div></div>
@@ -3292,6 +3457,7 @@ function bind(){
   });
   const cpf=document.getElementById('cpf');if(cpf)cpf.addEventListener('change',onCarPhoto);
   const xf=document.getElementById('xlsFileInput');if(xf)xf.addEventListener('change',onXlsFile);
+  const mdf=document.getElementById('mdFileInput');if(mdf)mdf.addEventListener('change',onMasterDataFile);
   document.querySelectorAll('[data-xlsmap]').forEach(sel=>sel.addEventListener('change',()=>{if(xlsImp)xlsImp.mapping[sel.dataset.xlsmap]=+sel.value;}));
   document.querySelectorAll('[data-repmap]').forEach(sel=>sel.addEventListener('change',()=>{if(xlsImp)xlsImp.repMap[sel.dataset.repmap]=sel.value;}));
 }
@@ -3501,6 +3667,8 @@ function onAInner(e){
   else if(a==='xls-back'){if(xlsImp)xlsImp.step='map';render();}
   else if(a==='xls-cancel'){xlsImp=null;S.pageShow.xlsPreview=undefined;render();}
   else if(a==='xls-confirm'){xlsConfirmImport();}
+  else if(a==='md-cancel'){mdImp=null;S.pageShow.mdItemPreview=undefined;S.pageShow.mdCustPreview=undefined;render();}
+  else if(a==='md-confirm'){mdConfirmImport();}
   else if(a==='repcalall'){S.repCalAll=!S.repCalAll;render();}
   else if(a==='loadmore'){const key=el.dataset.key,size=+el.dataset.size||50;S.pageShow[key]=(S.pageShow[key]||size)+size;render();}
   else if(a==='baldetail'){S.balDetailCust=el.dataset.cc;render();}
