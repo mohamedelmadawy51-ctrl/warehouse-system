@@ -10,7 +10,7 @@
 :root{
   --blue:#0B2E5C;--blue2:#1651A6;--blue-lg:#E8F0FE;
   --green:#12A66B;--green-d:#0D8656;--green-lg:#E4F7EE;
-  --paper:#F4F8FF;--card:#fff;
+  --paper:#F8FAFF;--card:#fff;
   --ok:#12A66B;--ok-bg:#E4F7EE;
   --bad:#E14B4B;--bad-bg:#FDECEC;
   --warn:#F0A73C;--warn-bg:#FEF3E2;
@@ -20,7 +20,7 @@
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;overflow:hidden;}
-body{font-family:'Cairo',sans-serif;background:linear-gradient(180deg,var(--blue-lg) 0%,var(--paper) 340px);color:var(--blue);-webkit-font-smoothing:antialiased;}
+body{font-family:'Cairo',sans-serif;background:linear-gradient(180deg,#F0F6FF 0%,var(--paper) 220px);color:var(--blue);-webkit-font-smoothing:antialiased;}
 .num{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;}
 button{font-family:inherit;cursor:pointer;border:none;outline:none;}
 input,select,textarea{font-family:inherit;outline:none;}
@@ -226,11 +226,11 @@ table.rep th{color:var(--muted);font-weight:800;font-size:10px;background:var(--
   .grid2,.grid3{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
   .row2{grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;}
   .grid2,.grid3{gap:16px;}
-  .field{margin-bottom:13px;}
-  .field label{font-size:11.5px;}
-  .field input,.field select,.field textarea{padding:9px 12px;font-size:13px;border-radius:8px;}
+  .field{margin-bottom:14px;}
+  .field label{font-size:12px;}
+  .field input,.field select,.field textarea{padding:11px 13px;font-size:13.5px;border-radius:9px;}
   .content{padding:10px 40px 28px;}
-  #nf,#cnsf,.form-narrow{max-width:640px;}
+  #nf,#cnsf,.form-narrow{max-width:640px;margin:0 auto;}
 }
 @media(min-width:1400px){
   #app{width:94vw;}
