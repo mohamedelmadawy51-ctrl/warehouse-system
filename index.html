@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>IFT | بضاعة الأمانة</title>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<!-- PWA: manifest + أيقونة التطبيق (نفس الأيقونة المستخدمة بالفعل داخل التطبيق) -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0B2E5C">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
@@ -4504,4 +4509,300 @@ function doXLS(){
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ld),'أرصدة المعامل');
   XLSX.writeFile(wb,'IFT_Amana_'+new Date().toISOString().slice(0,10)+'.xlsx');
 }
+
+/* ============================================================================
+   طبقة العمل بدون إنترنت (Offline Layer) + المزامنة التلقائية (Auto Sync)
+   ----------------------------------------------------------------------------
+   - لا تُغيّر أو تحذف أي وظيفة موجودة في النظام؛ فقط "تُغلّف" (wrap) دوال
+     الحفظ الأساسية (dbSet / svo / removeOrderRemote) بحيث:
+       • لو الإنترنت متاح: نفس السلوك القديم تمامًا (كتابة مباشرة على Firebase).
+       • لو الإنترنت مقطوع (أو فشلت الكتابة/انتهت المهلة): نحفظ العملية في
+         IndexedDB بدل ما نضيّعها، والتطبيق يكمل شغله محليًا بشكل طبيعي.
+   - عند عودة الاتصال: مزامنة تلقائية لكل العمليات المحفوظة، بالترتيب، مع
+     منع التكرار (كل عملية لها "مسار" ثابت — أي عملية جديدة على نفس المسار
+     تستبدل القديمة تلقائيًا بدل ما تتكرر، ونفس المسار بيتشال من الطابور
+     فور نجاح المزامنة بتاعه فقط — فمفيش فقد ولا تكرار).
+   - العمليات الحساسة اللي محتاجة تحقق لحظي من المخزون (صرف بضاعة فعلي،
+     تأكيدات استلام/تسليم بالمخزن، إلغاء عملية، تعديل سعة/حالة كونتر،
+     تزويد نتروجين، استلام كونتر) اتسابت "Online Required" زي ما هو مطلوب
+     بالظبط — التطبيق بيمنعها بوضوح لو مفيش إنترنت بدل ما يسمح بيها بدون
+     تحقق لحظي من الأرصدة الفعلية.
+   ============================================================================ */
+(function(){
+
+  /* ---------- 1) تخزين محلي دائم عبر IndexedDB لطابور العمليات (Outbox) ---------- */
+  const OFFLINE_DB_NAME='ift_offline_store';
+  const OFFLINE_DB_VERSION=1;
+  const OUTBOX_STORE='outbox';
+
+  function openOfflineDB(){
+    return new Promise((resolve,reject)=>{
+      if(!('indexedDB' in window)){reject(new Error('IndexedDB غير مدعوم في هذا المتصفح'));return;}
+      const req=indexedDB.open(OFFLINE_DB_NAME,OFFLINE_DB_VERSION);
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains(OUTBOX_STORE)){
+          db.createObjectStore(OUTBOX_STORE,{keyPath:'path'}); // path = مفتاح العملية بالضبط (نفس مسار Firebase) — بيضمن استبدال القديم بدل التكرار
+        }
+      };
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error);
+    });
+  }
+  let _offlineDBPromise=null;
+  function getOfflineDB(){
+    if(!_offlineDBPromise){
+      _offlineDBPromise=openOfflineDB().catch(e=>{console.error('تعذّر فتح IndexedDB',e);_offlineDBPromise=null;throw e;});
+    }
+    return _offlineDBPromise;
+  }
+  // يحفظ/يستبدل عملية في الطابور بمفتاح "path" — أي عملية جديدة على نفس المسار تستبدل القديمة (لا تكرار)
+  async function outboxPut(path,op,payload){
+    try{
+      const db=await getOfflineDB();
+      await new Promise((res,rej)=>{
+        const tx=db.transaction(OUTBOX_STORE,'readwrite');
+        tx.objectStore(OUTBOX_STORE).put({path,op,payload,ts:Date.now()});
+        tx.oncomplete=res;tx.onerror=()=>rej(tx.error);
+      });
+    }catch(e){console.error('outboxPut failed',path,e);}
+    updateSyncBadge();
+  }
+  async function outboxDelete(path){
+    try{
+      const db=await getOfflineDB();
+      await new Promise((res,rej)=>{
+        const tx=db.transaction(OUTBOX_STORE,'readwrite');
+        tx.objectStore(OUTBOX_STORE).delete(path);
+        tx.oncomplete=res;tx.onerror=()=>rej(tx.error);
+      });
+    }catch(e){console.error('outboxDelete failed',path,e);}
+  }
+  async function outboxGetAll(){
+    try{
+      const db=await getOfflineDB();
+      return await new Promise((res,rej)=>{
+        const tx=db.transaction(OUTBOX_STORE,'readonly');
+        const req=tx.objectStore(OUTBOX_STORE).getAll();
+        req.onsuccess=()=>res(req.result||[]);
+        req.onerror=()=>rej(req.error);
+      });
+    }catch(e){console.error('outboxGetAll failed',e);return [];}
+  }
+  async function outboxCount(){
+    try{
+      const db=await getOfflineDB();
+      return await new Promise((res,rej)=>{
+        const tx=db.transaction(OUTBOX_STORE,'readonly');
+        const req=tx.objectStore(OUTBOX_STORE).count();
+        req.onsuccess=()=>res(req.result||0);
+        req.onerror=()=>rej(req.error);
+      });
+    }catch(e){return 0;}
+  }
+
+  /* ---------- 2) تتبّع حالة الاتصال الفعلية (الشبكة + Firebase معًا) ---------- */
+  let netOnline = navigator.onLine;
+  let fbConnected = !IS_CONFIGURED; // لو النظام شغّال محليًا بدون Firebase (وضع تجريبي) نعتبره "متصل" دايمًا
+  function effectiveOnline(){ return IS_CONFIGURED ? (netOnline && fbConnected) : netOnline; }
+
+  window.addEventListener('online', ()=>{netOnline=true;updateSyncBadge();tryFlushOutbox();});
+  window.addEventListener('offline', ()=>{netOnline=false;updateSyncBadge();});
+
+  if(IS_CONFIGURED && FDB){
+    FDB.ref('.info/connected').on('value', snap=>{
+      const was=fbConnected;
+      fbConnected = snap.val()===true;
+      updateSyncBadge();
+      if(!was && fbConnected) tryFlushOutbox();
+    });
+  }
+
+  /* ---------- 3) مؤشر الحالة: متصل / غير متصل / جارِ المزامنة / تمت المزامنة ---------- */
+  let badgeEl=null,badgeDot=null,badgeText=null;
+  function ensureBadge(){
+    if(badgeEl) return;
+    badgeEl=document.createElement('div');
+    badgeEl.id='syncStatusBadge';
+    badgeEl.style.cssText='position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:99999;'+
+      'display:flex;align-items:center;gap:6px;background:rgba(11,46,92,.92);color:#fff;'+
+      'font-family:Cairo,sans-serif;font-size:11px;font-weight:700;padding:5px 12px;border-radius:999px;'+
+      'box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;transition:opacity .3s;direction:rtl;letter-spacing:.2px;';
+    badgeDot=document.createElement('span');
+    badgeDot.style.cssText='width:8px;height:8px;border-radius:50%;flex:none;transition:background .25s;';
+    badgeText=document.createElement('span');
+    badgeEl.appendChild(badgeDot);badgeEl.appendChild(badgeText);
+    document.body.appendChild(badgeEl);
+  }
+  let _syncedPulseTimer=null;
+  async function updateSyncBadge(forceState){
+    ensureBadge();
+    const pending = forceState==='__pendingKnown__' ? forceState.count : await outboxCount();
+    let state;
+    if(forceState==='syncing') state='syncing';
+    else if(forceState==='synced') state='synced';
+    else if(!effectiveOnline()) state='offline';
+    else if(typeof pending==='number' && pending>0) state='syncing';
+    else state='online';
+
+    const map={
+      offline:{color:'#E14B4B',label:'📴 غير متصل بالإنترنت'},
+      syncing:{color:'#F0A73C',label:'🔄 جارِ المزامنة'+(pending?` (${pending})`:'')},
+      synced:{color:'#12A66B',label:'✅ تمت المزامنة'},
+      online:{color:'#12A66B',label:'🟢 متصل'}
+    };
+    const cfg=map[state];
+    badgeDot.style.background=cfg.color;
+    badgeText.textContent=cfg.label;
+    badgeEl.style.opacity='1';
+    // في حالة "متصل" العادية (مفيش حاجة معلّقة) نخفّف وضوح المؤشر بعد شوية عشان ميعملش إزعاج بصري دائم
+    clearTimeout(badgeEl._fadeTimer);
+    if(state==='online' || state==='synced'){
+      badgeEl._fadeTimer=setTimeout(()=>{ if(badgeEl) badgeEl.style.opacity='0.35'; },2500);
+    }
+  }
+  function showSyncedPulse(){
+    updateSyncBadge('synced');
+    clearTimeout(_syncedPulseTimer);
+    _syncedPulseTimer=setTimeout(()=>updateSyncBadge(),3000);
+  }
+  updateSyncBadge();
+
+  /* ---------- 4) المزامنة التلقائية عند عودة الاتصال ---------- */
+  let flushing=false;
+  async function tryFlushOutbox(){
+    if(flushing) return;
+    if(!IS_CONFIGURED || !FDB) return;
+    if(!effectiveOnline()) return;
+    const all=await outboxGetAll();
+    if(!all.length) return;
+    flushing=true;
+    updateSyncBadge('syncing');
+    let syncedAny=false;
+    try{
+      all.sort((a,b)=>a.ts-b.ts); // نحافظ على ترتيب حدوث العمليات قدر الإمكان
+      for(const entry of all){
+        if(!effectiveOnline()) break; // اتقطع الاتصال أثناء المزامنة — نوقف ونكمل تاني مرة
+        try{
+          if(entry.op==='remove'){
+            await withTimeout(FDB.ref(ROOT+entry.path).remove(),20000,'flush-remove-'+entry.path);
+          } else {
+            await withTimeout(FDB.ref(ROOT+entry.path).set(entry.payload),20000,'flush-set-'+entry.path);
+          }
+          await outboxDelete(entry.path); // نمسح فور نجاح هذه العملية بالذات فقط — يمنع التكرار أو الفقد
+          syncedAny=true;
+        }catch(e){
+          console.error('فشلت مزامنة عملية، هتتحاول تاني لاحقًا',entry.path,e);
+        }
+      }
+    } finally {
+      flushing=false;
+      const remaining=await outboxCount();
+      if(remaining===0){ if(syncedAny) showSyncedPulse(); else updateSyncBadge(); }
+      else updateSyncBadge();
+    }
+  }
+  // شبكة أمان: نحاول المزامنة كل فترة لو لسه فيه عمليات معلّقة (تحسّبًا لأي حدث اتصال فاتنا)
+  setInterval(()=>{ if(effectiveOnline()) tryFlushOutbox(); },15000);
+
+  /* ---------- 5) تغليف دوال الحفظ الأساسية بدون تغيير سلوكها وقت الاتصال ---------- */
+
+  // dbSet: كل الجداول العامة (مستخدمين، عملاء، أصناف، معامل، كونترات، أرصدة، إعدادات...)
+  const _origDbSet = dbSet;
+  dbSet = async function(k, v){
+    if(!FDB) return _origDbSet(k, v); // وضع تجريبي محلي بدون Firebase — بدون تغيير
+    if(!effectiveOnline()){
+      await outboxPut(k,'set',v);
+      return; // العملية "نجحت" محليًا — التطبيق يكمل عادي وهتتزامن أوتوماتيك بعدين
+    }
+    try{
+      await withTimeout(FDB.ref(ROOT+k).set(v), 20000, k);
+    }catch(e){
+      console.error('Firebase write error — سيتم الحفظ محليًا والمزامنة لاحقًا',k,e);
+      await outboxPut(k,'set',v);
+      toast('📴 تعذّر الاتصال بالإنترنت — تم حفظ التغيير محليًا وسيُزامَن تلقائيًا فور عودة الاتصال');
+    }
+  };
+
+  // svo: حفظ الأوردرات (كل أوردر بمساره المستقل) + رصيد الأمانة
+  const _origSvo = svo;
+  svo = async function(dirtyOrders){
+    let ok=true;
+    if(FDB){
+      const list = dirtyOrders ? (Array.isArray(dirtyOrders)?dirtyOrders:[dirtyOrders]) : DB.orders;
+      const validList = list.filter(o=>o&&o.id);
+      if(validList.length){
+        if(!effectiveOnline()){
+          for(const o of validList) await outboxPut('ift_orders/'+o.id,'set',o);
+        } else {
+          const updates={};
+          validList.forEach(o=>{updates[o.id]=o;});
+          try{
+            await withTimeout(FDB.ref(ROOT+'ift_orders').update(updates),20000,'orders-update');
+          }catch(e){
+            console.error('Firebase orders write error — سيتم الحفظ محليًا والمزامنة لاحقًا',e);
+            for(const o of validList) await outboxPut('ift_orders/'+o.id,'set',o);
+            toast('📴 تعذّر الاتصال بالإنترنت — تم حفظ الطلب محليًا وسيُزامَن تلقائيًا فور عودة الاتصال');
+          }
+        }
+      }
+    }
+    await dbSet('ift_balances',DB.balances); // dbSet بقت offline-aware أوتوماتيك من التغليف اللي فوق
+    BAL_VERSION++;
+    return ok;
+  };
+
+  // removeOrderRemote: حذف أوردر (مثلاً عند إلغاء عملية)
+  const _origRemoveOrderRemote = removeOrderRemote;
+  removeOrderRemote = async function(id){
+    if(!FDB) return;
+    if(!effectiveOnline()){
+      await outboxPut('ift_orders/'+id,'remove',null);
+      return;
+    }
+    try{
+      await withTimeout(FDB.ref(ROOT+'ift_orders/'+id).remove(),20000,'remove-order');
+    }catch(e){
+      console.error('Firebase order delete error — سيتم الحذف محليًا والمزامنة لاحقًا',e);
+      await outboxPut('ift_orders/'+id,'remove',null);
+    }
+  };
+
+  /* ---------- 6) العمليات الحساسة للمخزون التي تحتاج تحقق لحظي — Online Required ---------- */
+  // دي العمليات اللي بتلمس أرصدة فعلية (صرف FEFO فعلي، تأكيدات استلام/تسليم بالمخزن تغيّر الأرصدة،
+  // إلغاء عملية بيعكس أرصدة، تعديل سعة/حالة كونتر، تزويد نتروجين، استلام كونتر جديد) —
+  // لازم تتحقق لحظيًا مع أحدث نسخة من الأرصدة على السيرفر عشان تتجنب أي تعارض بين مستخدمين في نفس اللحظة.
+  function requireOnlineForStock(){
+    if(!IS_CONFIGURED || !FDB) return true; // وضع تجريبي محلي — لا يوجد سيرفر مركزي أصلًا
+    if(effectiveOnline()) return true;
+    toast('🌐 هذه العملية تمس المخزون الفعلي وتحتاج اتصالاً بالإنترنت للتحقق اللحظي من الأرصدة — تحقق من اتصالك وحاول مرة أخرى');
+    return false;
+  }
+  [
+    ['doWH',            typeof doWH!=='undefined'?doWH:null],
+    ['doRDlv',          typeof doRDlv!=='undefined'?doRDlv:null],
+    ['doCancel',        typeof doCancel!=='undefined'?doCancel:null],
+    ['doEditCapacity',  typeof doEditCapacity!=='undefined'?doEditCapacity:null],
+    ['doToggleOOS',     typeof doToggleOOS!=='undefined'?doToggleOOS:null],
+    ['doStockNitrogen', typeof doStockNitrogen!=='undefined'?doStockNitrogen:null],
+    ['doReceiveCounter',typeof doReceiveCounter!=='undefined'?doReceiveCounter:null]
+  ].forEach(([name,orig])=>{
+    if(typeof orig!=='function') return;
+    window[name]=async function(...args){
+      if(!requireOnlineForStock()) return;
+      return orig.apply(this,args);
+    };
+  });
+
+  /* ---------- 7) تشغيل PWA: تسجيل الـ Service Worker (يشغّل الشاشة/الواجهة بدون إنترنت) ---------- */
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('sw.js').catch(e=>console.error('تعذّر تسجيل Service Worker',e));
+    });
+  }
+
+  /* ---------- 8) محاولة مزامنة فورية عند فتح التطبيق (لأي عمليات معلّقة من جلسة سابقة) ---------- */
+  setTimeout(()=>{ tryFlushOutbox(); updateSyncBadge(); }, 1200);
+
+})();
 </script></body></html>
