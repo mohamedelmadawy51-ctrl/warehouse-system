@@ -4602,8 +4602,8 @@ function doXLS(){
   }
 
   /* ---------- 2) تتبّع حالة الاتصال الفعلية (الشبكة + Firebase معًا) ---------- */
-  let netOnline = navigator.onLine;
-  let fbConnected = !IS_CONFIGURED; // لو النظام شغّال محليًا بدون Firebase (وضع تجريبي) نعتبره "متصل" دايمًا
+  var netOnline = navigator.onLine;
+  var fbConnected = !IS_CONFIGURED; // لو النظام شغّال محليًا بدون Firebase (وضع تجريبي) نعتبره "متصل" دايمًا
   function effectiveOnline(){ return IS_CONFIGURED ? (netOnline && fbConnected) : netOnline; }
 
   window.addEventListener('online', ()=>{netOnline=true;updateSyncBadge();tryFlushOutbox();});
@@ -4619,7 +4619,7 @@ function doXLS(){
   }
 
   /* ---------- 3) مؤشر الحالة: متصل / غير متصل / جارِ المزامنة / تمت المزامنة ---------- */
-  let badgeEl=null,badgeDot=null,badgeText=null;
+  var badgeEl=null,badgeDot=null,badgeText=null;
   function ensureBadge(){
     if(badgeEl) return;
     badgeEl=document.createElement('div');
@@ -4634,7 +4634,7 @@ function doXLS(){
     badgeEl.appendChild(badgeDot);badgeEl.appendChild(badgeText);
     document.body.appendChild(badgeEl);
   }
-  let _syncedPulseTimer=null;
+  var _syncedPulseTimer=null;
   async function updateSyncBadge(forceState){
     ensureBadge();
     const pending = forceState==='__pendingKnown__' ? forceState.count : await outboxCount();
@@ -4669,7 +4669,7 @@ function doXLS(){
   updateSyncBadge();
 
   /* ---------- 4) المزامنة التلقائية عند عودة الاتصال ---------- */
-  let flushing=false;
+  var flushing=false;
   async function tryFlushOutbox(){
     if(flushing) return;
     if(!IS_CONFIGURED || !FDB) return;
