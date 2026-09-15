@@ -4545,7 +4545,14 @@ function doXLS(){
           db.createObjectStore(OUTBOX_STORE,{keyPath:'path'}); // path = مفتاح العملية بالضبط (نفس مسار Firebase) — بيضمن استبدال القديم بدل التكرار
         }
       };
-      req.onsuccess=()=>resolve(req.result);
+      req.onsuccess=()=>{
+        const db=req.result;
+        // لو الاتصال اتقفل لأي سبب (مثلاً المستخدم عمل "Clear site data" والصفحة لسه فاتحة،
+        // أو المتصفح قفل الاتصال من تلقاء نفسه) نلغي النسخة المخزّنة عشان أي طلب جديد يفتح اتصال طازة بدل ما يحاول يستخدم اتصال ميت
+        db.onclose=()=>{ _offlineDBPromise=null; };
+        db.onversionchange=()=>{ db.close(); _offlineDBPromise=null; };
+        resolve(db);
+      };
       req.onerror=()=>reject(req.error);
     });
   }
@@ -4556,48 +4563,58 @@ function doXLS(){
     }
     return _offlineDBPromise;
   }
+  // يحاول تنفيذ عملية على IndexedDB، ولو فشلت بسبب اتصال مقفول (InvalidStateError) يعيد المحاولة مرة واحدة باتصال جديد
+  async function withFreshDbRetry(fn){
+    try{
+      const db=await getOfflineDB();
+      return await fn(db);
+    }catch(e){
+      if(e&&(e.name==='InvalidStateError'||/closing|closed/i.test(e.message||''))){
+        _offlineDBPromise=null;
+        const db=await getOfflineDB();
+        return await fn(db);
+      }
+      throw e;
+    }
+  }
   // يحفظ/يستبدل عملية في الطابور بمفتاح "path" — أي عملية جديدة على نفس المسار تستبدل القديمة (لا تكرار)
   async function outboxPut(path,op,payload){
     try{
-      const db=await getOfflineDB();
-      await new Promise((res,rej)=>{
+      await withFreshDbRetry(db=>new Promise((res,rej)=>{
         const tx=db.transaction(OUTBOX_STORE,'readwrite');
         tx.objectStore(OUTBOX_STORE).put({path,op,payload,ts:Date.now()});
         tx.oncomplete=res;tx.onerror=()=>rej(tx.error);
-      });
+      }));
     }catch(e){console.error('outboxPut failed',path,e);}
     updateSyncBadge();
   }
   async function outboxDelete(path){
     try{
-      const db=await getOfflineDB();
-      await new Promise((res,rej)=>{
+      await withFreshDbRetry(db=>new Promise((res,rej)=>{
         const tx=db.transaction(OUTBOX_STORE,'readwrite');
         tx.objectStore(OUTBOX_STORE).delete(path);
         tx.oncomplete=res;tx.onerror=()=>rej(tx.error);
-      });
+      }));
     }catch(e){console.error('outboxDelete failed',path,e);}
   }
   async function outboxGetAll(){
     try{
-      const db=await getOfflineDB();
-      return await new Promise((res,rej)=>{
+      return await withFreshDbRetry(db=>new Promise((res,rej)=>{
         const tx=db.transaction(OUTBOX_STORE,'readonly');
         const req=tx.objectStore(OUTBOX_STORE).getAll();
         req.onsuccess=()=>res(req.result||[]);
         req.onerror=()=>rej(req.error);
-      });
+      }));
     }catch(e){console.error('outboxGetAll failed',e);return [];}
   }
   async function outboxCount(){
     try{
-      const db=await getOfflineDB();
-      return await new Promise((res,rej)=>{
+      return await withFreshDbRetry(db=>new Promise((res,rej)=>{
         const tx=db.transaction(OUTBOX_STORE,'readonly');
         const req=tx.objectStore(OUTBOX_STORE).count();
         req.onsuccess=()=>res(req.result||0);
         req.onerror=()=>rej(req.error);
-      });
+      }));
     }catch(e){return 0;}
   }
 
