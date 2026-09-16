@@ -776,9 +776,28 @@ function updateBG(){
   app.insertAdjacentHTML('afterbegin', buildBG(bgTab));
 }
 
+async function dbGetCritical(k, {retries=2, timeoutMs=20000}={}){
+  // نسخة "حرجة" من قراءة البيانات: بترمي استثناء بدل ما ترجع قيمة افتراضية بصمت،
+  // عشان الاستدعاء يقدر يفرّق بين "القراءة نجحت ورجعت فاضية فعلاً" و"القراءة فشلت/انتهت مهلتها"
+  // ده مهم جدًا لمفتاح المستخدمين (ift_users): لو اعتبرنا فشل القراءة = "مفيش مستخدمين"، هنمسح كل المستخدمين
+  // الحقيقيين محليًا (وممكن حتى نكتبهم فوق النسخة الحقيقية على فايرباس!) لمجرد بطء مؤقت في الشبكة.
+  let lastErr;
+  for(let i=0;i<=retries;i++){
+    try{
+      const snap = await withTimeout(FDB.ref(ROOT+k).once('value'), timeoutMs, k);
+      return snap.val();
+    }catch(e){
+      lastErr=e;
+      console.error('فشلت قراءة حرجة، محاولة رقم', i+1, k, e);
+      if(i<retries) await new Promise(r=>setTimeout(r, 1200*(i+1)));
+    }
+  }
+  throw lastErr || new Error('critical read failed: '+k);
+}
+
+let dbLoadError=false; // true لو فشلت قراءة بيانات المستخدمين الحرجة بعد كل المحاولات
 async function loadDB(){
   const keys=[
-    ['users','ift_users',null],
     ['customers','ift_customers',[{code:'C001',name:'صيدلية النور'},{code:'C002',name:'مجمع الشفاء'}]],
     ['items','ift_items',[{code:'I001',name:'أمبولات فيتامين ب12',unit:'علبة'},{code:'I002',name:'محلول ملحي 500مل',unit:'كيس'}]],
     ['balances','ift_balances',{}],
@@ -793,12 +812,27 @@ async function loadDB(){
     ['settings','ift_settings',{n2DailyLossPct:3,n2MinThreshold:10}],
     ['cars','ift_cars',[]],
   ];
-  // نجيب كل المفاتيح مع بعض بالتوازي بدل واحد ورا التاني — بيقلل زمن الدخول بشكل كبير
+  // قراءة بيانات المستخدمين بشكل حرج ومنفصل (مع إعادة محاولة) — أهم بيانات في النظام ولازم لا نخطئ في التعامل معها
+  dbLoadError=false;
+  if(FDB){
+    try{
+      DB.users = await dbGetCritical('ift_users');
+    }catch(e){
+      console.error('تعذّر تحميل بيانات المستخدمين نهائيًا بعد إعادة المحاولة',e);
+      dbLoadError=true;
+      DB.users = DB.users || []; // نسيب أي نسخة سابقة موجودة في الذاكرة زي ما هي، وما نكتبش أي حاجة فوقها
+    }
+  } else {
+    DB.users = DB.users || null;
+  }
+  // نجيب باقي المفاتيح مع بعض بالتوازي — دي أقل حساسية، وفشل قراءتها مؤقتًا بيرجع لقيم افتراضية آمنة بدل ما يوقف الدخول
   const results=await Promise.all([...keys.map(([,k,fb])=>dbGet(k,fb)),fetchOrdersData()]);
   keys.forEach(([prop],i)=>{DB[prop]=results[i];});
   if(!FDB){DB.orders=DB.orders||[];} // بدون فايرباس (وضع تجريبي محلي) خلي DB.orders زي ما هي فاضية
 
-  if(!DB.users||!DB.users.length){DB.users=[{username:'admin',password:'admin123',name:'مدير النظام',role:'admin',active:true}];await dbSet('ift_users',DB.users);}
+  // إنشاء حساب المدير الافتراضي بس لو قراءة المستخدمين نجحت فعليًا ورجعت فاضية (أول تشغيل حقيقي للنظام)
+  // — وليس في حالة فشل القراءة (dbLoadError)، عشان ميتكتبش يوزر افتراضي فوق بيانات حقيقية بسبب مشكلة اتصال مؤقتة
+  if(!dbLoadError&&(!DB.users||!DB.users.length)){DB.users=[{username:'admin',password:'admin123',name:'مدير النظام',role:'admin',active:true}];await dbSet('ift_users',DB.users);}
   // ترحيل بيانات قديمة: كل معمل كان مربوط بعميل واحد فقط (custCode)، دلوقتي ممكن يكون مربوط بأكتر من عميل (custCodes) — من غير ما نأثر على البيانات القديمة
   let labsMigrated=false;
   (DB.labs||[]).forEach(l=>{if((!l.custCodes||!l.custCodes.length)&&l.custCode){l.custCodes=[l.custCode];labsMigrated=true;}});
@@ -1713,8 +1747,17 @@ async function init(){
   if(IS_CONFIGURED)migrateOrdersToKeyedFormatIfNeeded(); // بدون await — تعمل في الخلفية وميعطلش فتح التطبيق أو أي إجراء تاني
   await loadDB();
   dbReady=true;
-  if(IS_CONFIGURED){startRealTimeSync();}
+  if(IS_CONFIGURED && !dbLoadError){startRealTimeSync();}
+  if(window.__refreshSyncBadge)window.__refreshSyncBadge();
   if(S.screen==='signin')render(); // لو كانت شاشة الدخول متفتحة وقت اكتمال التحميل، نحدّثها
+}
+async function retryLoadUsers(){
+  dbReady=false;render();
+  await loadDB();
+  dbReady=true;
+  if(IS_CONFIGURED && !dbLoadError){startRealTimeSync();}
+  if(window.__refreshSyncBadge)window.__refreshSyncBadge();
+  render();
 }
 // لو المتصفح رجّع الصفحة من "Back-Forward Cache" (بيحصل لما التاب يتعلّق في الخلفية لفترة أو عند التنقل بين الصفحات)،
 // اتصال Firebase المباشر (WebSocket) بيتقفل من غير ما نلاحظ، وأي عملية بعد كده هتفضل "معلّقة" لغير نهاية.
@@ -1798,7 +1841,12 @@ function rSI(){return `<div class="signin">
   <img class="slogo" src="${LOGO}" alt="IFT">
   <h2>تسجيل الدخول</h2>
   <div class="sub">IFT Corporation — نظام بضاعة الأمانة</div>
-  ${S.err?`<div class="err">${S.err}</div>`:!dbReady?`<div style="background:var(--blue-lg);color:var(--blue2);font-size:12px;font-weight:700;padding:8px 12px;border-radius:9px;margin-bottom:14px;">⏳ جارِ تجهيز البيانات في الخلفية...</div>`:''}
+  ${S.err?`<div class="err">${S.err}</div>`:
+    dbLoadError?`<div style="background:#FDECEC;color:#C0392B;font-size:12px;font-weight:700;padding:10px 12px;border-radius:9px;margin-bottom:14px;">
+      ⚠️ تعذّر تحميل بيانات المستخدمين — تحقق من اتصال الإنترنت
+      <button type="button" data-a="retryload" style="display:block;width:100%;margin-top:8px;background:#C0392B;color:#fff;border:none;padding:8px;border-radius:7px;font-weight:800;font-size:12px;">🔄 إعادة المحاولة</button>
+    </div>`:
+    !dbReady?`<div style="background:var(--blue-lg);color:var(--blue2);font-size:12px;font-weight:700;padding:8px 12px;border-radius:9px;margin-bottom:14px;">⏳ جارِ تجهيز البيانات في الخلفية...</div>`:''}
   <form id="sif">
     <div class="field"><label>اسم المستخدم</label><input name="un" autocomplete="username" required></div>
     <div class="field"><label>كلمة المرور</label><input type="password" name="pw" autocomplete="current-password" required></div>
@@ -3642,7 +3690,7 @@ function onA(e){
 function onAInner(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -3651,6 +3699,7 @@ function onAInner(e){
   }
   if(a==='theme'){nightMode=!nightMode;localStorage.setItem(NIGHT_KEY,nightMode?'1':'0');_lastBGTab=null;render();}
   else if(a==='go-si'){S.screen='signin';S.err='';render();}
+  else if(a==='retryload'){retryLoadUsers();}
   else if(a==='music'){toggleAmbient();render();}
   else if(a==='printrep'){S.printRep=el.dataset.rep;render();}
   else if(a==='back-manifest'){S.printRep=null;render();}
@@ -3773,7 +3822,7 @@ async function onSI(e){
   e.preventDefault();const f=new FormData(e.target);
   const un=f.get('un').trim(),pw=f.get('pw');
   if(!dbReady){S.err='جارِ تحميل البيانات... حاول بعد ثانية';render();return;}
-  if((!DB.users||!DB.users.length)&&un==='admin'&&pw==='admin123'){DB.users=[{username:'admin',password:'admin123',name:'مدير النظام',role:'admin',active:true}];await svu();}
+  if(dbLoadError){S.err='⚠️ تعذّر تحميل بيانات المستخدمين — تحقق من الإنترنت واضغط "إعادة المحاولة" أعلاه';render();return;}
   const u=DB.users.find(x=>x.username===un&&x.password===pw);
   if(!u){S.err='اسم المستخدم أو كلمة المرور غير صحيحة';render();return;}
   if(!u.active){S.err='هذا الحساب موقوف — راجع المدير';render();return;}
@@ -4659,11 +4708,13 @@ function doXLS(){
     if(forceState==='syncing') state='syncing';
     else if(forceState==='synced') state='synced';
     else if(!effectiveOnline()) state='offline';
+    else if(typeof dbLoadError!=='undefined' && dbLoadError) state='loaderror';
     else if(typeof pending==='number' && pending>0) state='syncing';
     else state='online';
 
     const map={
       offline:{color:'#E14B4B',label:'📴 غير متصل بالإنترنت'},
+      loaderror:{color:'#E14B4B',label:'⚠️ تعذّر تحميل بيانات المستخدمين'},
       syncing:{color:'#F0A73C',label:'🔄 جارِ المزامنة'+(pending?` (${pending})`:'')},
       synced:{color:'#12A66B',label:'✅ تمت المزامنة'},
       online:{color:'#12A66B',label:'🟢 متصل'}
@@ -4820,6 +4871,9 @@ function doXLS(){
 
   /* ---------- 8) محاولة مزامنة فورية عند فتح التطبيق (لأي عمليات معلّقة من جلسة سابقة) ---------- */
   setTimeout(()=>{ tryFlushOutbox(); updateSyncBadge(); }, 1200);
+
+  // نتيح تحديث المؤشر يدويًا من خارج هذا الـ IIFE (مثلاً بعد اكتمال/فشل تحميل بيانات المستخدمين)
+  window.__refreshSyncBadge = updateSyncBadge;
 
 })();
 </script></body></html>
