@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>IFT | بضاعة الأمانة</title>
-<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <!-- PWA: manifest + أيقونة التطبيق (نفس الأيقونة المستخدمة بالفعل داخل التطبيق) -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0B2E5C">
@@ -26,7 +26,7 @@
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;overflow:hidden;}
 body{font-family:'Cairo',sans-serif;background:linear-gradient(180deg,#F0F6FF 0%,var(--paper) 220px);color:var(--blue);-webkit-font-smoothing:antialiased;}
-.num{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;}
+.num,.display{font-family:'Space Grotesk','JetBrains Mono','Cairo',monospace;font-variant-numeric:tabular-nums;}
 button{font-family:inherit;cursor:pointer;border:none;outline:none;}
 input,select,textarea{font-family:inherit;outline:none;}
 #app{max-width:640px;margin:0 auto;height:100vh;height:100dvh;display:flex;flex-direction:column;background:var(--paper);position:relative;overflow:hidden;}
@@ -102,18 +102,22 @@ input,select,textarea{font-family:inherit;outline:none;}
 .tabbar .ic{font-size:17px;}
 .tabbar button.active{color:var(--blue);}
 
-.stitle{padding:16px 16px 2px;font-size:18px;font-weight:900;color:var(--blue);}
+.stitle{padding:16px 16px 2px;font-size:18px;font-weight:900;color:var(--blue);font-family:'Space Grotesk','Cairo',sans-serif;}
 .ssub{padding:0 16px 10px;font-size:12px;color:var(--muted);}
 .content{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:4px 14px 24px;}
 
 /* CARDS */
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:11px;box-shadow:var(--sh);transition:transform .2s var(--ease),box-shadow .22s var(--ease);}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:11px;box-shadow:var(--sh);transition:transform .2s var(--ease),box-shadow .22s var(--ease);position:relative;overflow:hidden;}
+.card::before{content:'';position:absolute;top:0;right:0;left:0;height:3px;background:linear-gradient(90deg,var(--blue2),var(--blue));}
+.card.done::before{background:linear-gradient(90deg,var(--ok),#6FE0B0);}
+.card.rej::before{background:linear-gradient(90deg,var(--bad),#F19393);}
+.card.warn::before{background:linear-gradient(90deg,var(--warn),#FBC97A);}
 @media(hover:hover){.card[data-a="open"]:hover,.card[data-a="baldetail"]:hover{transform:translateY(-3px);box-shadow:var(--shl);border-color:var(--blue-lg);cursor:pointer;}}
 .card[data-a="open"]:active,.card[data-a="baldetail"]:active{transform:translateY(-1px) scale(.99);}
 .ch{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;gap:8px;}
-.ctitle{font-weight:800;font-size:14px;}
+.ctitle{font-weight:800;font-size:14px;font-family:'Space Grotesk','Cairo',sans-serif;}
 .cmeta{font-size:11px;color:var(--muted);margin-top:2px;}
-.tag{display:inline-block;font-size:10px;font-weight:800;padding:3px 9px;border-radius:999px;}
+.tag{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 10px;border-radius:999px;}
 .ta{background:var(--ok-bg);color:var(--ok);}
 .tw{background:var(--warn-bg);color:var(--warn);}
 .tt{background:var(--blue-lg);color:var(--blue2);}
@@ -121,15 +125,15 @@ input,select,textarea{font-family:inherit;outline:none;}
 .kv b{color:var(--blue);font-weight:700;}
 
 /* TRACKER */
-.tracker{position:relative;margin:12px 0 4px;padding-top:4px;}
-.trk-line{position:absolute;top:11px;height:2px;background:var(--line);z-index:1;}
-.trk-prog{position:absolute;top:11px;height:2px;background:var(--ok);z-index:1;transition:width .2s;}
+.tracker{position:relative;margin:14px 0 4px;padding-top:4px;}
+.trk-line{position:absolute;top:9px;height:2px;background:var(--line);z-index:1;}
+.trk-prog{position:absolute;top:9px;height:2px;background:var(--ok);z-index:1;transition:width .2s;}
 .trk-dots{display:flex;align-items:flex-start;position:relative;z-index:2;}
 .seg{flex:1;display:flex;flex-direction:column;align-items:center;position:relative;}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--line);z-index:2;border:2px solid #fff;}
-.seg.done .dot{background:var(--ok);}
-.seg.now .dot{background:var(--green);box-shadow:0 0 0 4px rgba(84,164,55,.2);}
-.seg.rej .dot{background:var(--bad);}
+.dot{width:20px;height:20px;border-radius:50%;background:#EEF1F7;color:var(--muted);z-index:2;border:2px solid #EEF1F7;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;font-family:'JetBrains Mono',monospace;transition:all .2s var(--ease);}
+.seg.done .dot{background:var(--ok);color:#fff;border-color:var(--ok);}
+.seg.now .dot{background:var(--green);color:#fff;border-color:var(--green);box-shadow:0 0 0 4px rgba(84,164,55,.2);}
+.seg.rej .dot{background:var(--bad);color:#fff;border-color:var(--bad);}
 .tlbl{font-size:8px;color:var(--muted);margin-top:5px;text-align:center;line-height:1.3;}
 .seg.now .tlbl{color:var(--green);font-weight:800;}
 .seg.rej .tlbl{color:var(--bad);font-weight:800;}
@@ -142,17 +146,17 @@ input,select,textarea{font-family:inherit;outline:none;}
 .bs:disabled{transform:none!important;box-shadow:none!important;}
 .bok{background:var(--ok);color:#fff;}
 .bbad{background:var(--bad);color:#fff;}
-.bgo{background:var(--blue);color:#fff;}
-.bgreen{background:var(--green);color:#fff;}
+.bgo{background:linear-gradient(135deg,var(--blue2),var(--blue));color:#fff;box-shadow:0 4px 14px rgba(22,81,166,.28);}
+.bgreen{background:linear-gradient(135deg,var(--green),var(--green-d));color:#fff;box-shadow:0 4px 14px rgba(18,166,107,.28);}
 .bghost{background:#fff;color:var(--blue);border:1.5px solid var(--line) !important;}
 
 /* MISC */
 .empty{text-align:center;padding:60px 20px;color:var(--muted);}
 .empty .ic{font-size:36px;margin-bottom:10px;}
-.empty .t{font-weight:800;color:var(--blue);font-size:14px;margin-bottom:4px;}
+.empty .t{font-weight:800;color:var(--blue);font-size:14px;margin-bottom:4px;font-family:'Space Grotesk','Cairo',sans-serif;}
 .segtog{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
 .segtog button{flex:1;min-width:140px;padding:13px 14px;font-weight:800;font-size:13px;background:#fff;color:var(--muted);border:1.5px solid var(--line);border-radius:11px;transition:transform .16s var(--ease),box-shadow .2s var(--ease),background .18s,color .18s,border-color .18s;}
-.segtog button.on{background:var(--blue);color:#fff;border-color:var(--blue);}
+.segtog button.on{background:linear-gradient(135deg,var(--blue2),var(--blue));color:#fff;border-color:var(--blue);box-shadow:0 4px 14px rgba(22,81,166,.28);}
 @media(hover:hover){.segtog button:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(11,56,102,.12);}}
 .segtog button:active{transform:scale(.97);}
 .slabel{font-size:10.5px;font-weight:800;color:var(--blue2);margin:16px 0 8px;text-transform:uppercase;letter-spacing:.5px;}
@@ -164,15 +168,17 @@ input,select,textarea{font-family:inherit;outline:none;}
 .balbad{background:var(--bad-bg);border-color:var(--bad);color:var(--bad);}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
-.rbox{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:12px;cursor:pointer;transition:transform .18s var(--ease),box-shadow .2s var(--ease);}
+.rbox{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:12px;cursor:pointer;transition:transform .18s var(--ease),box-shadow .2s var(--ease);position:relative;overflow:hidden;}
+.rbox::before{content:'';position:absolute;top:0;right:0;left:0;height:3px;background:linear-gradient(90deg,var(--blue2),var(--blue));opacity:.85;}
 @media(hover:hover){.rbox:hover{transform:translateY(-2px);box-shadow:var(--shl);}}
 .rbox:active{transform:scale(.97);}
-.rbox .big{font-size:24px;font-weight:900;color:var(--blue);font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;}
+.rbox .big{font-size:24px;font-weight:900;color:var(--blue);font-family:'Space Grotesk','JetBrains Mono',monospace;font-variant-numeric:tabular-nums;}
 .rbox .lab{font-size:10px;color:var(--muted);font-weight:700;}
 .pillbar{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;scrollbar-width:none;}
 .pillbar::-webkit-scrollbar{display:none;}
-.pillbar button{white-space:nowrap;padding:7px 13px;border-radius:999px;background:#fff;border:1.5px solid var(--line);font-size:11.5px;font-weight:700;color:var(--muted);}
-.pillbar button.on{background:var(--blue);color:#fff;border-color:var(--blue);}
+.pillbar button{white-space:nowrap;padding:7px 13px;border-radius:999px;background:#fff;border:1.5px solid var(--line);font-size:11.5px;font-weight:700;color:var(--muted);transition:all .18s var(--ease);}
+@media(hover:hover){.pillbar button:hover{border-color:var(--blue2);color:var(--blue2);}}
+.pillbar button.on{background:linear-gradient(135deg,var(--blue2),var(--blue));color:#fff;border-color:var(--blue);box-shadow:0 4px 12px rgba(22,81,166,.25);}
 
 /* CALENDAR STRIP */
 .calwrap{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:10px 8px;margin-bottom:12px;box-shadow:var(--sh);}
@@ -419,6 +425,7 @@ function withTimeout(promise, ms=20000, label=''){
 async function dbGet(k, fb){
   if(!FDB) return fb;
   try{
+    if(IS_CONFIGURED)await ensureFirebaseAuth(); // نتأكد إننا مسجَّلين (Anonymous) قبل أي قراءة، تحسّبًا لانتهاء الجلسة
     const snap = await withTimeout(FDB.ref(ROOT+k).once('value'), 20000, k);
     const val = snap.val();
     return val !== null ? val : fb;
@@ -427,7 +434,10 @@ async function dbGet(k, fb){
 
 async function dbSet(k, v){
   if(!FDB) return;
-  try{ await withTimeout(FDB.ref(ROOT+k).set(v), 20000, k); }catch(e){ console.error('Firebase write error',e); toast('⚠️ تعذّر الاتصال بقاعدة البيانات — تحقق من الإنترنت وحاول تاني'); }
+  try{
+    if(IS_CONFIGURED)await ensureFirebaseAuth(); // نفس الشيء قبل أي كتابة — الكتابة هي غالبًا اللي قواعد الأمان بتمنعها من غير تسجيل دخول
+    await withTimeout(FDB.ref(ROOT+k).set(v), 20000, k);
+  }catch(e){ console.error('Firebase write error',e); toast('⚠️ تعذّر الاتصال بقاعدة البيانات — تحقق من الإنترنت وحاول تاني'); }
 }
 
 // ===== تحميل الأوردرات بفلترة تاريخ (بدل تحميل التاريخ كله دفعة واحدة) =====
@@ -784,6 +794,7 @@ async function dbGetCritical(k, {retries=2, timeoutMs=20000}={}){
   let lastErr;
   for(let i=0;i<=retries;i++){
     try{
+      if(IS_CONFIGURED)await ensureFirebaseAuth(); // بدون تسجيل دخول صامت، قواعد الأمان بترفض القراءة نهائيًا (permission_denied)
       const snap = await withTimeout(FDB.ref(ROOT+k).once('value'), timeoutMs, k);
       return snap.val();
     }catch(e){
@@ -1744,6 +1755,9 @@ async function init(){
   nightMode=localStorage.getItem(NIGHT_KEY)==='1';applyNight();
   S.screen='welcome';render(); // نعرض شاشة الدخول فورًا من غير ما ننتظر تحميل قاعدة البيانات
   loadWeather();
+  // لازم نسجّل دخول صامت (Anonymous Auth) الأول قبل أي قراءة/كتابة على قاعدة البيانات،
+  // عشان قواعد الأمان الجديدة بترفض أي عملية من غير مستخدم مسجَّل (auth != null) — ده كان ناقص خالص قبل كده
+  if(IS_CONFIGURED)await ensureFirebaseAuth();
   if(IS_CONFIGURED)migrateOrdersToKeyedFormatIfNeeded(); // بدون await — تعمل في الخلفية وميعطلش فتح التطبيق أو أي إجراء تاني
   await loadDB();
   dbReady=true;
@@ -1753,6 +1767,7 @@ async function init(){
 }
 async function retryLoadUsers(){
   dbReady=false;render();
+  if(IS_CONFIGURED)await ensureFirebaseAuth();
   await loadDB();
   dbReady=true;
   if(IS_CONFIGURED && !dbLoadError){startRealTimeSync();}
@@ -2009,7 +2024,8 @@ function rCard(o){
   const tc=o.kind==='addition'?'ta':o.kind==='withdrawal'?'tw':(o.kind==='return'||o.kind==='customer_return')?'tw':'tt';
   const tt=o.kind==='addition'?'إضافة':o.kind==='withdrawal'?(o.orderType==='regular'?'أوردر عادي':o.orderType==='excel'?'أذن مجمع':'صرف'):o.kind==='return'?'إرجاع':o.kind==='customer_return'?'سحوبات':'تحويل';
   const sc=o.stage==='rejected'?'var(--bad)':(o.stage==='delivered'||o.stage==='approved'||o.stage==='returned'||o.stage==='customer_returned')?'var(--ok)':'var(--warn)';
-  return `<div class="card" data-a="open" data-id="${o.id}">
+  const cardCls=o.stage==='rejected'?'rej':(o.stage==='delivered'||o.stage==='approved'||o.stage==='returned'||o.stage==='customer_returned')?'done':'warn';
+  return `<div class="card ${cardCls}" data-a="open" data-id="${o.id}">
     <div class="ch"><div><div class="ctitle">${otitle(o)}</div><div class="cmeta">${o.inv?'SO: '+o.inv+' · ':''}${o.cname||o.fcname||''}</div></div><span class="tag ${tc}">${tt}</span></div>
     <div class="kv"><span>الحالة</span><b style="color:${sc}">${stageLabel(o)}</b></div>
     <div class="kv"><span>الكمية</span><b>${o.qty||'-'}</b></div>
@@ -2030,7 +2046,7 @@ function drawTracker(steps,idx,rejIdx){
   const isRej=rejIdx!=null;
   const progColor=isRej?'var(--bad)':'var(--ok)';
   const progW=isRej?(span*(rejIdx/(n-1))):(span*frac);
-  const dots=steps.map((s,i)=>{let c=i<idx?'done':i===idx?'now':'';if(isRej&&i===rejIdx)c='rej';return`<div class="seg ${c}"><div class="dot"></div><div class="tlbl">${s.l}</div></div>`;}).join('');
+  const dots=steps.map((s,i)=>{let c=i<idx?'done':i===idx?'now':'';if(isRej&&i===rejIdx)c='rej';const inner=c==='done'?'✓':(i+1);return`<div class="seg ${c}"><div class="dot">${inner}</div><div class="tlbl">${s.l}</div></div>`;}).join('');
   return`<div class="tracker">
     <div class="trk-line" style="right:${edge}%;left:${edge}%"></div>
     <div class="trk-prog" style="right:${edge}%;width:${progW}%;background:${progColor}"></div>
@@ -4691,11 +4707,13 @@ function doXLS(){
     badgeEl=document.createElement('div');
     badgeEl.id='syncStatusBadge';
     badgeEl.style.cssText='position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:99999;'+
-      'display:flex;align-items:center;gap:6px;background:rgba(11,46,92,.92);color:#fff;'+
-      'font-family:Cairo,sans-serif;font-size:11px;font-weight:700;padding:5px 12px;border-radius:999px;'+
-      'box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;transition:opacity .3s;direction:rtl;letter-spacing:.2px;';
+      'display:flex;align-items:center;gap:7px;'+
+      'font-family:Cairo,sans-serif;font-size:10.5px;font-weight:700;padding:6px 13px;border-radius:999px;'+
+      'letter-spacing:.02em;box-shadow:0 4px 14px rgba(11,46,92,.18);pointer-events:none;'+
+      'transition:opacity .3s,background .3s,border-color .3s,color .3s;direction:rtl;'+
+      'border:1px solid rgba(11,46,92,.15);background:rgba(11,46,92,.06);color:#0B2E5C;';
     badgeDot=document.createElement('span');
-    badgeDot.style.cssText='width:8px;height:8px;border-radius:50%;flex:none;transition:background .25s;';
+    badgeDot.style.cssText='width:7px;height:7px;border-radius:50%;flex:none;transition:background .25s;';
     badgeText=document.createElement('span');
     badgeEl.appendChild(badgeDot);badgeEl.appendChild(badgeText);
     document.body.appendChild(badgeEl);
@@ -4712,21 +4730,26 @@ function doXLS(){
     else if(typeof pending==='number' && pending>0) state='syncing';
     else state='online';
 
+    // نفس منطق ألوان شارة الحالة في نظام IFT للإنتاج (Online/Offline/Syncing/Synced) — خلفية شفافة ملوّنة حسب الحالة
     const map={
-      offline:{color:'#E14B4B',label:'📴 غير متصل بالإنترنت'},
-      loaderror:{color:'#E14B4B',label:'⚠️ تعذّر تحميل بيانات المستخدمين'},
-      syncing:{color:'#F0A73C',label:'🔄 جارِ المزامنة'+(pending?` (${pending})`:'')},
-      synced:{color:'#12A66B',label:'✅ تمت المزامنة'},
-      online:{color:'#12A66B',label:'🟢 متصل'}
+      offline:{dot:'#E14B4B',bg:'rgba(225,75,75,.12)',border:'rgba(225,75,75,.3)',text:'#B33A3A',label:'📴 غير متصل بالإنترنت'},
+      loaderror:{dot:'#E14B4B',bg:'rgba(225,75,75,.12)',border:'rgba(225,75,75,.3)',text:'#B33A3A',label:'⚠️ تعذّر تحميل بيانات المستخدمين'},
+      syncing:{dot:'#F0A73C',bg:'rgba(240,167,60,.14)',border:'rgba(240,167,60,.32)',text:'#9A6E11',label:'🔄 جارِ المزامنة'+(pending?` (${pending})`:'')},
+      synced:{dot:'#12A66B',bg:'rgba(18,166,107,.12)',border:'rgba(18,166,107,.28)',text:'#0D8656',label:'✅ تمت المزامنة'},
+      online:{dot:'#12A66B',bg:'rgba(18,166,107,.12)',border:'rgba(18,166,107,.28)',text:'#0D8656',label:'🟢 متصل'}
     };
     const cfg=map[state];
-    badgeDot.style.background=cfg.color;
+    badgeDot.style.background=cfg.dot;
+    badgeDot.style.boxShadow=state==='syncing'?`0 0 0 3px ${cfg.bg}`:'none';
     badgeText.textContent=cfg.label;
+    badgeEl.style.background=cfg.bg;
+    badgeEl.style.borderColor=cfg.border;
+    badgeEl.style.color=cfg.text;
     badgeEl.style.opacity='1';
     // في حالة "متصل" العادية (مفيش حاجة معلّقة) نخفّف وضوح المؤشر بعد شوية عشان ميعملش إزعاج بصري دائم
     clearTimeout(badgeEl._fadeTimer);
     if(state==='online' || state==='synced'){
-      badgeEl._fadeTimer=setTimeout(()=>{ if(badgeEl) badgeEl.style.opacity='0.35'; },2500);
+      badgeEl._fadeTimer=setTimeout(()=>{ if(badgeEl) badgeEl.style.opacity='0.5'; },2500);
     }
   }
   function showSyncedPulse(){
@@ -4742,6 +4765,7 @@ function doXLS(){
     if(flushing) return;
     if(!IS_CONFIGURED || !FDB) return;
     if(!effectiveOnline()) return;
+    try{ if(typeof ensureFirebaseAuth==='function') await ensureFirebaseAuth(); }catch(_){}
     const all=await outboxGetAll();
     if(!all.length) return;
     flushing=true;
