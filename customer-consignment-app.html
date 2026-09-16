@@ -566,7 +566,40 @@ async function resolveAreaNames(coordsList){
 }
 function uid(p){return p+'-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);}
 
-let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[]};
+/* ===== حفظ مكان التسليم الفعلي لكل عميل (بيتسجل وقت التسليم الحقيقي من المندوب) ===== */
+function haversineM(a,b){ // المسافة بين نقطتين بالمتر
+  try{
+    const[lat1,lon1]=a.split(',').map(Number),[lat2,lon2]=b.split(',').map(Number);
+    const R=6371000,toRad=d=>d*Math.PI/180;
+    const dLat=toRad(lat2-lat1),dLon=toRad(lon2-lon1);
+    const s=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));
+  }catch(e){return Infinity;}
+}
+async function saveCustDeliveryLocation(ccode,loc,placeLabel){
+  if(!ccode||!loc)return;
+  DB.custLocations[ccode]=DB.custLocations[ccode]||[];
+  const list=DB.custLocations[ccode];
+  // لو الموقع الجديد قريب (أقل من 150 متر) من مكان محفوظ قبل كده لنفس العميل، نعتبره نفس المكان ونحدّثه بدل ما نكرره
+  let match=list.find(l=>haversineM(l.loc,loc)<150);
+  if(match){
+    match.count=(match.count||1)+1;match.lastAt=Date.now();match.loc=loc;
+    if(placeLabel&&!match.placeLabel)match.placeLabel=placeLabel;
+  } else {
+    match={id:uid('loc'),loc,region:AREA_CACHE[loc]||null,placeLabel:placeLabel||'',count:1,firstAt:Date.now(),lastAt:Date.now()};
+    list.push(match);
+  }
+  await svcloc();
+  // نجيب اسم المنطقة (لو لسه مش معروف) وناخده مننا نحدّث السجل تاني من غير ما نعطّل التسليم
+  if(!match.region){
+    resolveAreaNames([loc]).then(async()=>{
+      if(AREA_CACHE[loc]){match.region=AREA_CACHE[loc];await svcloc();if(S.tab==='new'||S.oid)render();}
+    });
+  }
+}
+function custLocationsFor(ccode){return(DB.custLocations&&DB.custLocations[ccode])?[...DB.custLocations[ccode]].sort((a,b)=>(b.lastAt||0)-(a.lastAt||0)):[];}
+
+let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[],custLocations:{}};
 
 /* ============================================================
    نظام الخلفيات الديناميكية — IFT Veterinary
@@ -822,6 +855,7 @@ async function loadDB(){
     ['counterLabMeta','ift_counterLabMeta',{}],
     ['settings','ift_settings',{n2DailyLossPct:3,n2MinThreshold:10}],
     ['cars','ift_cars',[]],
+    ['custLocations','ift_custLocations',{}],
   ];
   // قراءة بيانات المستخدمين بشكل حرج ومنفصل (مع إعادة محاولة) — أهم بيانات في النظام ولازم لا نخطئ في التعامل معها
   dbLoadError=false;
@@ -880,6 +914,7 @@ async function svn2(){await dbSet('ift_nitrogenBalances',DB.nitrogenBalances);}
 async function svclm(){await dbSet('ift_counterLabMeta',DB.counterLabMeta);}
 async function svst(){await dbSet('ift_settings',DB.settings);}
 async function svcar(){await dbSet('ift_cars',DB.cars);}
+async function svcloc(){await dbSet('ift_custLocations',DB.custLocations);}
 let BAL_VERSION=0; // يترفع كل مرة تتغيّر فيها أرصدة الأمانة — بيُستخدم لتفريغ الكاش بدل إعادة حساب كل حاجة من الصفر كل مرة
 
 // ===== ترحيل تخزين الأوردرات من "مصفوفة واحدة" إلى "عنصر مستقل لكل أوردر بمفتاحه الثابت id" (مرة واحدة فقط) =====
@@ -1203,19 +1238,23 @@ let pendCarPhoto=null;
 const XLS_IMPORT_FIELDS=[
   {key:'rep',label:'اسم المندوب',required:true,aliases:['المندوب','مندوب','اسم المندوب','السائق','مندوب التوزيع']},
   {key:'carNo',label:'رقم السيارة',required:false,aliases:['رقم السيارة','السيارة','رقم العربية','عربية']},
+  {key:'route',label:'خط السير',required:false,aliases:['خط السير','خط سير','الخط']},
+  {key:'outDate',label:'تاريخ الخروج',required:false,aliases:['الخروج','تاريخ الخروج']},
+  {key:'invDate',label:'تاريخ الفاتورة',required:false,aliases:['تاريخ الفاتورة','الفاتورة']},
   {key:'soNo',label:'رقم الإذن',required:false,aliases:['الاذن','الإذن','رقم الاذن','رقم الإذن','رقم الامر','رقم الأمر']},
   {key:'ccode',label:'كود العميل',required:true,aliases:['كود العميل','كود','الكود']},
   {key:'cname',label:'اسم العميل',required:true,aliases:['اسم العميل','العميل']},
-  {key:'sector',label:'القطاع',required:false,aliases:['قطاع','القطاع','المنطقة']},
-  {key:'priceCat',label:'فئة البيع',required:false,aliases:['فئة البيع','البيع','قطاع البيع']},
-  {key:'icode',label:'كود الصنف',required:true,aliases:['الصنف','كود الصنف']},
+  {key:'sector',label:'القطاع',required:false,aliases:['قطاع','القطاع','منطقة البيع']},
+  {key:'priceCat',label:'فئة البيع / منطقة البيع',required:false,aliases:['فئة البيع','البيع','قطاع البيع','منطقة البيع']},
+  {key:'whName',label:'المخزن',required:false,aliases:['المخزن','مخزن']},
+  {key:'icode',label:'كود الصنف',required:true,aliases:['الصنف','كود الصنف','رقم الصنف']},
   {key:'iname',label:'اسم الصنف',required:true,aliases:['اسم الصنف2','اسم الصنف','اسم المنتج','الصنف2']},
-  {key:'batch',label:'التشغيلة',required:false,aliases:['الشغيلة','كود الشغيلة','تشغيلة','التشغيلة']},
+  {key:'batch',label:'التشغيلة',required:false,aliases:['الشغيلة','كود الشغيلة','تشغيلة','التشغيلة','رقم التشغيلة']},
   {key:'expiry',label:'تاريخ الصلاحية',required:false,aliases:['الصلاحية','تاريخ الانتهاء','تاريخ الصلاحية']},
   {key:'qty',label:'الكمية',required:true,aliases:['كمية','الكمية']},
   {key:'unit',label:'الوحدة',required:false,aliases:['وحدة','الوحدة']},
   {key:'note',label:'ملاحظات',required:false,aliases:['ملاحظات','ملحوظة','ملاحظة']},
-  {key:'outDate',label:'تاريخ الخروج',required:false,aliases:['الخروج','تاريخ الخروج']},
+  {key:'labName',label:'المعمل / مكان التسليم',required:false,aliases:['المعمل','مكان التسليم','المعمل/مكان التسليم','العميل (مكان التسليم)']},
   {key:'retDate',label:'تاريخ العودة',required:false,aliases:['العودة','تاريخ العودة']},
 ];
 let xlsImp=null; // {fileName,headers,rawRows,mapping,repMap,step,parsedRows}
@@ -1434,11 +1473,12 @@ function xlsContinueToPreview(){
   if(missing.length){toast('⛔ الرجاء تحديد عمود لكل من: '+missing.map(f=>f.label).join('، '));return;}
   const g=(row,key)=>{const idx=xlsImp.mapping[key];return (idx==null||idx<0)?'':xh(row[idx]);};
   const parsed=xlsImp.rawRows.map(row=>({
-    rep:g(row,'rep'),carNo:g(row,'carNo'),soNo:g(row,'soNo'),
+    rep:g(row,'rep'),carNo:g(row,'carNo'),route:g(row,'route'),soNo:g(row,'soNo'),
     ccode:g(row,'ccode'),cname:g(row,'cname'),sector:g(row,'sector'),priceCat:g(row,'priceCat'),
+    whName:g(row,'whName'),labName:g(row,'labName'),
     icode:g(row,'icode'),iname:g(row,'iname'),batch:g(row,'batch'),
     expiry:parseFlexDate(g(row,'expiry')),qty:+g(row,'qty')||0,unit:g(row,'unit'),
-    note:g(row,'note'),outDate:parseFlexDate(g(row,'outDate')),retDate:parseFlexDate(g(row,'retDate'))
+    note:g(row,'note'),outDate:parseFlexDate(g(row,'outDate')),invDate:parseFlexDate(g(row,'invDate')),retDate:parseFlexDate(g(row,'retDate'))
   })).filter(r=>r.ccode||r.icode||r.rep);
   if(!parsed.length){toast('⚠️ لم يتم العثور على صفوف بيانات صالحة بعد المطابقة');return;}
   const repUsers=DB.users.filter(u=>u.role==='rep');
@@ -1459,6 +1499,13 @@ async function xlsConfirmImport(){
   try{
   let added=0,dup=0,invalid=0;
   const newOrders=[];
+  // أي قطاعات مكتوبة في الشيت ومش موجودة بالنظام، نضيفها تلقائيًا الأول عشان معلومة القطاع متتفقدش
+  const newSectorNames=[...new Set(xlsImp.parsedRows.map(r=>(r.sector||'').trim()).filter(Boolean))]
+    .filter(sn=>!DB.sectors.some(s=>xh(s.name)===xh(sn)));
+  if(newSectorNames.length){
+    newSectorNames.forEach(sn=>DB.sectors.push({code:sn,name:sn}));
+    await svs();
+  }
   xlsImp.parsedRows.forEach(row=>{
     if(!row.ccode||!row.icode||!row.qty||row.qty<=0){invalid++;return;}
     const key=(row.soNo||'')+'|'+row.icode+'|'+(row.batch||'')+'|'+row.ccode+'|'+row.qty;
@@ -1466,6 +1513,8 @@ async function xlsConfirmImport(){
     const repUser=DB.users.find(x=>x.username===xlsImp.repMap[row.rep]);
     const custRec=fc(row.ccode),itemRec=fi(row.icode);
     const sectorRec=DB.sectors.find(s=>xh(s.name)===xh(row.sector));
+    // نحاول نربط "المعمل/مكان التسليم" المكتوب في الشيت بمعمل مسجَّل فعليًا تابع لنفس العميل (لو الاسم متطابق أو قريب)
+    const labMatch=row.labName?labsForCustomer(row.ccode).find(l=>xh(l.name)===xh(row.labName)||xh(l.name).includes(xh(row.labName))||xh(row.labName).includes(xh(l.name))):null;
     const o={
       id:uid('o'),kind:'withdrawal',orderType:'excel',stage:'with_rep',
       cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
@@ -1479,8 +1528,10 @@ async function xlsConfirmImport(){
       note:row.note||'',
       sector:sectorRec?sectorRec.code:'',sectorName:sectorRec?sectorRec.name:(row.sector||''),
       priceCat:row.priceCat||'',
-      repName:repUser?repUser.name:row.rep,carNo:row.carNo||'',
-      retDate:row.retDate||'',
+      repName:repUser?repUser.name:row.rep,carNo:row.carNo||'',route:row.route||'',
+      outDate:row.outDate||'',invDate:row.invDate||'',retDate:row.retDate||'',
+      whName:row.whName||'',
+      labCode:labMatch?labMatch.code:'',labName:labMatch?labMatch.name:(row.labName||''),
       xlsImportKey:key,xlsImportedAt:Date.now(),xlsImportedBy:u.username,xlsFileName:xlsImp.fileName
     };
     DB.orders.push(o);newOrders.push(o);added++;
@@ -1626,7 +1677,7 @@ function rXlsImport(){
     <div class="slabel" style="margin-top:12px;">👁️ معاينة (${rows.length} صف)</div>
     <div style="overflow-x:auto;">
     <table class="mtbl" style="font-size:11px;">
-      <thead><tr><th>الإذن</th><th>العميل</th><th>الصنف</th><th>التشغيلة</th><th>الكمية</th><th>الوحدة</th><th>المندوب</th><th>العربية</th></tr></thead>
+      <thead><tr><th>الإذن</th><th>العميل</th><th>الصنف</th><th>التشغيلة</th><th>الكمية</th><th>الوحدة</th><th>المندوب</th><th>العربية</th><th>خط السير</th><th>المخزن</th><th>المعمل/مكان التسليم</th></tr></thead>
       <tbody>${pg.rows.map(r=>`<tr>
         <td>${r.soNo||'-'}</td>
         <td>${r.ccode||'-'} — ${r.cname||'-'}</td>
@@ -1636,6 +1687,9 @@ function rXlsImport(){
         <td>${r.unit||'-'}</td>
         <td>${r.rep||'-'}</td>
         <td>${r.carNo||'-'}</td>
+        <td>${r.route||'-'}</td>
+        <td>${r.whName||'-'}</td>
+        <td>${r.labName||'-'}</td>
       </tr>`).join('')}</tbody>
     </table></div>
     ${loadMoreBtn('xlsPreview',pg)}
@@ -2188,6 +2242,7 @@ function rConsF(){return`
     <div class="field"><label>كود العميل</label><select name="cc" id="ccc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
     <div class="field"><label>الاسم</label><input name="cn" id="ccn" readonly></div>
   </div>
+  <div id="cloc"></div>
   <div class="field"><label>المعمل</label><select name="labCode" id="cslab" required><option value="">اختر العميل أولاً...</option></select></div>
   <div class="row2">
     <div class="field"><label>كود الصنف</label><select name="ic" id="cic" required><option value="">اختر الصنف...</option>${itemOpts()}</select></div>
@@ -2318,6 +2373,7 @@ function rSubF(){
     <div class="field"><label>كود العميل</label><select name="cc" id="scc" required><option value="">اختر العميل...</option>${custOpts()}</select></div>
     <div class="field"><label>اسم العميل</label><input name="cn" id="scn" readonly></div>
   </div>
+  <div id="sloc"></div>
   <div class="row2">
     <div class="field"><label>كود الصنف</label><select name="ic" id="sic" required><option value="">اختر الصنف...</option>${itemOpts()}</select></div>
     <div class="field"><label>اسم الصنف</label><input name="iname" id="sin" readonly></div>
@@ -3114,6 +3170,10 @@ function rOrd(){
   }
   if(o.repReceivedAt&&o.stage!=='with_rep')flds+=`<div class="kv"><span>وقت استلام المندوب</span><b>${new Date(o.repReceivedAt).toLocaleString('ar-EG')} — ${o.repReceivedBy||''}</b></div>`;
   if(o.carNo)flds+=`<div class="kv"><span>رقم العربية</span><b>${o.carNo}</b></div>`;
+  if(o.route)flds+=`<div class="kv"><span>خط السير</span><b>${o.route}</b></div>`;
+  if(o.whName)flds+=`<div class="kv"><span>المخزن</span><b>${o.whName}</b></div>`;
+  if(o.labName)flds+=`<div class="kv"><span>المعمل/مكان التسليم</span><b>${o.labName}</b></div>`;
+  if(o.invDate)flds+=`<div class="kv"><span>تاريخ الفاتورة</span><b>${o.invDate}</b></div>`;
   if(o.driverPhoto||o.carPhoto)flds+=`<div class="kv" style="align-items:center;"><span>صورة السائق/السيارة</span><span style="display:flex;gap:8px;">${o.driverPhoto?`<img src="${o.driverPhoto}" style="width:38px;height:38px;border-radius:50%;object-fit:cover;border:1.5px solid var(--line);" title="صورة السائق">`:''}${o.carPhoto?`<img src="${o.carPhoto}" style="width:52px;height:38px;border-radius:8px;object-fit:cover;border:1.5px solid var(--line);" title="صورة السيارة">`:''}</span></div>`;
   if(o.rejectReason)flds+=`<div class="kv"><span>سبب الرفض</span><b style="color:var(--bad)">${o.rejectReason}</b></div>`;
   if(o.dloc)flds+=`<div class="kv"><span>موقع التسليم</span><b><a href="https://maps.google.com/?q=${o.dloc}" target="_blank" style="color:var(--blue2);">عرض على الخريطة 🗺️</a></b></div>`;
@@ -3387,7 +3447,7 @@ function rAdm(){return`
     <div class="slabel">إضافة عميل / معمل</div>
     <form id="acf"><div class="row2"><div class="field"><label>الكود</label><input name="code" required></div><div class="field"><label>الاسم</label><input name="name" required></div></div><button class="btn-primary" type="submit">إضافة</button></form>
     <div class="slabel">العملاء (${DB.customers.length})</div>
-    ${DB.customers.map(c=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${c.code}</span><b>${c.name}</b></div>`).join('')}
+    ${DB.customers.map(c=>{const locs=custLocationsFor(c.code);return`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${c.code}${locs.length?` · <span style="color:var(--blue2);font-weight:700;">📍 ${locs.length} موقع تسليم محفوظ</span>`:''}</span><b>${c.name}</b></div>`;}).join('')}
     <div class="slabel">إضافة قطاع</div>
     <form id="asf"><div class="row2"><div class="field"><label>الكود</label><input name="code" required></div><div class="field"><label>اسم القطاع</label><input name="name" placeholder="بيطري / بشري / أعلاف ..." required></div></div><button class="btn-primary" type="submit">إضافة القطاع</button></form>
     <div class="slabel">القطاعات (${DB.sectors.length})</div>
@@ -3505,6 +3565,10 @@ function bind(){
   lkSel('scc','scn','c');lkSel('sic','sin','i','sisec','sisecval');
   lkSel('tcc','tcn','c');lkSel('tic','tin','i');
   bbl();tbbl();bsi();bhsi();bclsi();blcsi();checkInvDup();
+  const sccEl=document.getElementById('scc');
+  if(sccEl){updateCustLocBox('scc','sloc');sccEl.addEventListener('change',()=>updateCustLocBox('scc','sloc'));}
+  const cccEl=document.getElementById('ccc');
+  if(cccEl){updateCustLocBox('ccc','cloc');cccEl.addEventListener('change',()=>updateCustLocBox('ccc','cloc'));}
   const rci=document.getElementById('repCalInput');if(rci)rci.addEventListener('change',()=>{S.repCalDate=rci.value;render();});
   const rsi=document.getElementById('repSearchInput');if(rsi)rsi.addEventListener('input',()=>{S.repSearch=rsi.value;debouncedRender(()=>{render();const e2=document.getElementById('repSearchInput');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});});
   const mfd=document.getElementById('mfDate');if(mfd)mfd.addEventListener('change',()=>{S.repCalDate=mfd.value;render();});
@@ -3531,6 +3595,23 @@ function bind(){
   document.querySelectorAll('[data-repmap]').forEach(sel=>sel.addEventListener('change',()=>{if(xlsImp)xlsImp.repMap[sel.dataset.repmap]=sel.value;}));
 }
 
+function custLocHTML(ccode){
+  const locs=custLocationsFor(ccode);
+  if(!locs.length)return'';
+  return`<div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 12px;margin:-6px 0 12px;font-size:11.5px;">
+    <b style="color:var(--blue2);">📍 مكان/أماكن تسليم سابقة لهذا العميل:</b>
+    ${locs.map(l=>`<div style="margin-top:5px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <span>${l.region?'🗺️ '+l.region:'📌 موقع محفوظ'}${l.placeLabel?' — '+l.placeLabel:''} <span style="color:var(--muted);">(${l.count} تسليم${l.count>1?'ة':''})</span></span>
+      <a href="https://maps.google.com/?q=${l.loc}" target="_blank" style="color:var(--blue2);font-weight:800;white-space:nowrap;">عرض 🗺️</a>
+    </div>`).join('')}
+  </div>`;
+}
+function updateCustLocBox(scID,slocID){
+  const ccEl=document.getElementById(scID),box=document.getElementById(slocID);
+  if(!ccEl||!box)return;
+  const cc=(ccEl.value||'').trim();
+  box.innerHTML=cc?custLocHTML(cc):'';
+}
 function bbl(){
   const box=document.getElementById('balbx');if(!box)return;
   const u=S.user;
@@ -4129,6 +4210,7 @@ async function doRDlv(id){
     o.dlvQty=dlvQty;
     o.retQty=retQty;
     o.dloc=loc||null;
+    if(loc)await saveCustDeliveryLocation(o.ccode,loc,o.labName||o.cname||'');
     if(o.kind==='withdrawal'&&o.orderType==='amanah'){
       // نلتقط "الرصيد قبل الصرف" و"الخطة الافتراضية" (لو اتصرفت من رصيد نفس العميل بس، من غير تبادل) قبل أي تعديل — للمقارنة في التقرير
       o.custBalanceAtDelivery=gb(o.ccode,o.icode);
