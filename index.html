@@ -419,7 +419,6 @@ function withTimeout(promise, ms=20000, label=''){
 async function dbGet(k, fb){
   if(!FDB) return fb;
   try{
-    if(IS_CONFIGURED)await ensureFirebaseAuth(); // نتأكد إننا مسجَّلين (Anonymous) قبل أي قراءة، تحسّبًا لانتهاء الجلسة
     const snap = await withTimeout(FDB.ref(ROOT+k).once('value'), 20000, k);
     const val = snap.val();
     return val !== null ? val : fb;
@@ -428,10 +427,7 @@ async function dbGet(k, fb){
 
 async function dbSet(k, v){
   if(!FDB) return;
-  try{
-    if(IS_CONFIGURED)await ensureFirebaseAuth(); // نفس الشيء قبل أي كتابة — الكتابة هي غالبًا اللي قواعد الأمان بتمنعها من غير تسجيل دخول
-    await withTimeout(FDB.ref(ROOT+k).set(v), 20000, k);
-  }catch(e){ console.error('Firebase write error',e); toast('⚠️ تعذّر الاتصال بقاعدة البيانات — تحقق من الإنترنت وحاول تاني'); }
+  try{ await withTimeout(FDB.ref(ROOT+k).set(v), 20000, k); }catch(e){ console.error('Firebase write error',e); toast('⚠️ تعذّر الاتصال بقاعدة البيانات — تحقق من الإنترنت وحاول تاني'); }
 }
 
 // ===== تحميل الأوردرات بفلترة تاريخ (بدل تحميل التاريخ كله دفعة واحدة) =====
@@ -788,7 +784,6 @@ async function dbGetCritical(k, {retries=2, timeoutMs=20000}={}){
   let lastErr;
   for(let i=0;i<=retries;i++){
     try{
-      if(IS_CONFIGURED)await ensureFirebaseAuth(); // بدون تسجيل دخول صامت، قواعد الأمان بترفض القراءة نهائيًا (permission_denied)
       const snap = await withTimeout(FDB.ref(ROOT+k).once('value'), timeoutMs, k);
       return snap.val();
     }catch(e){
@@ -1749,9 +1744,6 @@ async function init(){
   nightMode=localStorage.getItem(NIGHT_KEY)==='1';applyNight();
   S.screen='welcome';render(); // نعرض شاشة الدخول فورًا من غير ما ننتظر تحميل قاعدة البيانات
   loadWeather();
-  // لازم نسجّل دخول صامت (Anonymous Auth) الأول قبل أي قراءة/كتابة على قاعدة البيانات،
-  // عشان قواعد الأمان الجديدة بترفض أي عملية من غير مستخدم مسجَّل (auth != null) — ده كان ناقص خالص قبل كده
-  if(IS_CONFIGURED)await ensureFirebaseAuth();
   if(IS_CONFIGURED)migrateOrdersToKeyedFormatIfNeeded(); // بدون await — تعمل في الخلفية وميعطلش فتح التطبيق أو أي إجراء تاني
   await loadDB();
   dbReady=true;
@@ -1761,7 +1753,6 @@ async function init(){
 }
 async function retryLoadUsers(){
   dbReady=false;render();
-  if(IS_CONFIGURED)await ensureFirebaseAuth();
   await loadDB();
   dbReady=true;
   if(IS_CONFIGURED && !dbLoadError){startRealTimeSync();}
@@ -4751,7 +4742,6 @@ function doXLS(){
     if(flushing) return;
     if(!IS_CONFIGURED || !FDB) return;
     if(!effectiveOnline()) return;
-    try{ if(typeof ensureFirebaseAuth==='function') await ensureFirebaseAuth(); }catch(_){}
     const all=await outboxGetAll();
     if(!all.length) return;
     flushing=true;
