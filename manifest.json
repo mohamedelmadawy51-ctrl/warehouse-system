@@ -1,0 +1,20 @@
+{
+  "name": "IFT | بضاعة الأمانة",
+  "short_name": "بضاعة الأمانة",
+  "description": "نظام إدارة بضاعة الأمانة والمخزون - IFT (يعمل بدون إنترنت مع مزامنة تلقائية)",
+  "start_url": "./index.html",
+  "id": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F8FAFF",
+  "theme_color": "#0B2E5C",
+  "orientation": "portrait-primary",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
