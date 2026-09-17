@@ -1268,6 +1268,15 @@ let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'am
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
+// تحويل كائن Date اللي طالع من قراءة تاريخ إكسيل حقيقي إلى نص يوم/شهر/سنة —
+// مكتبة قراءة الإكسيل أحياناً بترجّع الوقت أقرب لمنتصف الليل بفارق كام ثانية بس (خطأ دقة أرقام معروف في المكتبة)
+// وده كان بيسبب رجوع اليوم يوم واحد للخلف قرب حدود منتصف الليل (زي قراءة 18/9 كأنها 17/9)
+// فبنقرّب لأقرب يوم بتوقيت UTC عشان نضمن اليوم الصحيح دايماً بغض النظر عن التوقيت المحلي للجهاز
+function excelDateToYMD(d){
+  const rounded=new Date(Math.round(d.getTime()/86400000)*86400000);
+  const y=rounded.getUTCFullYear(),m=String(rounded.getUTCMonth()+1).padStart(2,'0'),day=String(rounded.getUTCDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
 function orderDateStr(o){return o.schedDate||ymd(o.createdAt||Date.now());}
 const AR_WD=['أحد','اثنين','ثلاثاء','أربعاء','خميس','جمعة','سبت'];
 const AR_WD_S=['ح','ن','ث','ر','خ','ج','س'];
@@ -1485,7 +1494,7 @@ function xlsAutoMatch(headers){
 }
 function parseFlexDate(v){
   if(v==null||v==='')return '';
-  if(v instanceof Date&&!isNaN(v))return ymd(v);
+  if(v instanceof Date&&!isNaN(v))return excelDateToYMD(v);
   // احتياطي: لو وصل رقم تسلسلي من إكسل بدل تاريخ حقيقي (نادر مع cellDates:true) — نحوّله بدل ما نعامله كنص
   if(typeof v==='number'&&isFinite(v)){
     try{
