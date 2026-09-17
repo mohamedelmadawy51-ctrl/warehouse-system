@@ -121,6 +121,7 @@ input,select,textarea{font-family:inherit;outline:none;}
 .ta{background:var(--ok-bg);color:var(--ok);}
 .tw{background:var(--warn-bg);color:var(--warn);}
 .tt{background:var(--blue-lg);color:var(--blue2);}
+.tb{background:var(--bad-bg);color:var(--bad);}
 .kv{display:flex;justify-content:space-between;font-size:12px;padding:2.5px 0;color:#3a4a60;}
 .kv b{color:var(--blue);font-weight:700;}
 
@@ -2002,6 +2003,7 @@ function rSI(){return `<div class="signin">
 
 function getTabs(){
   const r=S.user.role,all=[{k:'home',ic:'🏠',t:'الرئيسية'}];
+  if(r==='admin')all.push({k:'dash',ic:'📈',t:'الداشبورد'});
   if(r==='data_entry'||r==='admin')all.push({k:'new',ic:'➕',t:'جديد'},{k:'transfer',ic:'🔁',t:'تحويل'});
   if(['admin','data_entry','accounts'].includes(r))all.push({k:'bal',ic:'💳',t:'الأرصدة'});
   all.push({k:'rep',ic:'📊',t:'التقارير'});
@@ -2013,6 +2015,7 @@ function rShell(){
   const u=S.user;
   let body='';
   if(S.tab==='home')body=rHome();
+  else if(S.tab==='dash')body=rDash();
   else if(S.tab==='new')body=rNew();
   else if(S.tab==='transfer')body=rTr();
   else if(S.tab==='bal')body=rBal();
@@ -2251,6 +2254,136 @@ function greetingMsg(){
   const name=(S.user&&S.user.name)?S.user.name.split(' ')[0]:'';
   const isMorning=h<12;
   return {txt:`${isMorning?'صباح الخير':'مساء الخير'} يا ${name}`,ic:isMorning?'☀️':'🌙'};
+}
+
+// ============ لوحة المعلومات (نظرة عامة على نشاط الشركة) — بيانات حقيقية من DB.orders/customers/items/users ============
+function monthBuckets(n){
+  const now=new Date();const arr=[];
+  for(let i=n-1;i>=0;i--){
+    const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+    arr.push({y:d.getFullYear(),m:d.getMonth(),label:d.toLocaleDateString('ar-EG',{month:'short'})});
+  }
+  return arr;
+}
+function ordersInMonth(y,m){
+  return DB.orders.filter(o=>{const d=new Date(o.createdAt||0);return d.getFullYear()===y&&d.getMonth()===m;}).length;
+}
+function miniBarChart(values,labels,color){
+  const w=320,h=132,padB=22,padT=18;
+  const n=Math.max(1,values.length);
+  const slot=(w-16)/n;
+  const bw=Math.max(10,slot-8);
+  const max=Math.max(1,...values);
+  let bars='';
+  values.forEach((v,i)=>{
+    const bh=Math.round((v/max)*(h-padB-padT));
+    const x=8+i*slot+(slot-bw)/2;
+    const y=h-padB-bh;
+    bars+=`<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(bh,2)}" rx="5" fill="${color}"/>
+      ${v>0?`<text x="${x+bw/2}" y="${y-5}" font-size="10" font-weight="700" fill="${color}" text-anchor="middle">${v}</text>`:''}
+      <text x="${x+bw/2}" y="${h-6}" font-size="9.5" fill="var(--muted)" text-anchor="middle">${labels[i]}</text>`;
+  });
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:132px;display:block;">${bars}</svg>`;
+}
+function timeAgoStr(ts){
+  if(!ts)return '';
+  const diff=Date.now()-ts,mins=Math.floor(diff/60000);
+  if(mins<1)return 'الآن';
+  if(mins<60)return `منذ ${mins} دقيقة`;
+  const hrs=Math.floor(mins/60);
+  if(hrs<24)return `منذ ${hrs} ساعة`;
+  return `منذ ${Math.floor(hrs/24)} يوم`;
+}
+function rDash(){
+  const u=S.user;
+  const grt=greetingMsg();
+  const now=new Date();
+  const custCount=DB.customers.length;
+  const empCount=DB.users.length;
+  const itemCount=DB.items.length;
+  const ordersTotal=DB.orders.length;
+
+  const buckets=monthBuckets(6);
+  const monthCounts=buckets.map(b=>ordersInMonth(b.y,b.m));
+  const thisMonth=monthCounts[monthCounts.length-1]||0;
+  const lastMonth=monthCounts[monthCounts.length-2]||0;
+  const monthDelta=lastMonth>0?Math.round(((thisMonth-lastMonth)/lastMonth)*100):null;
+
+  const doneStages=['delivered','approved','returned','customer_returned'];
+  const statusGroups=[
+    {l:'قيد التنفيذ',stages:['pending_accounts','pending_cars','pending_warehouse','pending_rep','with_rep','return_pending_rep','return_pending_acc','return_pending_wh','customer_return_pending_acc','customer_return_pending_cars','customer_return_pending_wh'],color:'var(--warn)'},
+    {l:'تم التنفيذ',stages:doneStages,color:'var(--ok)'},
+    {l:'مرفوض',stages:['rejected'],color:'var(--bad)'},
+  ];
+  statusGroups.forEach(g=>g.count=DB.orders.filter(o=>g.stages.includes(o.stage)).length);
+  const statusMax=Math.max(1,...statusGroups.map(g=>g.count));
+
+  const recent=[...DB.orders].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0,6);
+  const recentActivity=[...DB.orders].filter(o=>o.updAt).sort((a,b)=>(b.updAt||0)-(a.updAt||0)).slice(0,6);
+  const actIcon=o=>o.stage==='rejected'?'❌':doneStages.includes(o.stage)?'✅':'🕓';
+  const stageColors=o=>o.stage==='rejected'?['var(--bad)','var(--bad-bg)']:doneStages.includes(o.stage)?['var(--ok)','var(--ok-bg)']:['var(--warn)','var(--warn-bg)'];
+
+  const quickTabs=getTabs().filter(t=>t.k!=='dash'&&t.k!=='home');
+
+  return `
+  <div class="stitle">لوحة المعلومات</div>
+  <div class="ssub">${now.toLocaleDateString('ar-EG',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
+  <div class="content">
+    <div class="greetbar"><span>${grt.txt} — إليك نظرة عامة على نشاط الشركة <span style="font-size:15px;">${grt.ic}</span></span></div>
+
+    <div class="grid2" style="margin-bottom:12px;">
+      <div class="rbox" style="text-align:center;"><div style="font-size:20px;">👥</div><div class="big">${custCount}</div><div class="lab">إجمالي العملاء</div></div>
+      <div class="rbox" style="text-align:center;"><div style="font-size:20px;">🧍</div><div class="big">${empCount}</div><div class="lab">إجمالي المستخدمين</div></div>
+      <div class="rbox" style="text-align:center;"><div style="font-size:20px;">📦</div><div class="big">${itemCount}</div><div class="lab">إجمالي الأصناف</div></div>
+      <div class="rbox" style="text-align:center;"><div style="font-size:20px;">🧾</div><div class="big">${ordersTotal}</div><div class="lab">إجمالي الأذونات</div></div>
+    </div>
+
+    <div class="card">
+      <div class="slabel" style="margin-top:0;">📈 حركة الأذونات — آخر 6 شهور</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;font-weight:700;color:var(--blue);margin-bottom:4px;">
+        <span>الشهر الحالي: <b style="font-family:'Space Grotesk',monospace;">${thisMonth}</b></span>
+        ${monthDelta!==null?`<span style="color:${monthDelta>=0?'var(--ok)':'var(--bad)'};">${monthDelta>=0?'↑':'↓'} ${Math.abs(monthDelta)}% عن الشهر الماضي</span>`:''}
+      </div>
+      ${miniBarChart(monthCounts,buckets.map(b=>b.label),'var(--blue2)')}
+    </div>
+
+    <div class="card">
+      <div class="slabel" style="margin-top:0;">📊 حالة الأذونات الحالية</div>
+      ${statusGroups.map(g=>`
+        <div style="margin-bottom:9px;">
+          <div style="display:flex;justify-content:space-between;font-size:11.5px;font-weight:700;color:var(--blue);margin-bottom:3px;"><span>${g.l}</span><span>${g.count}</span></div>
+          <div style="background:var(--line);border-radius:999px;height:8px;overflow:hidden;"><div style="width:${Math.round((g.count/statusMax)*100)}%;background:${g.color};height:100%;border-radius:999px;"></div></div>
+        </div>`).join('')}
+    </div>
+
+    ${quickTabs.length?`<div class="slabel">⚡ إجراءات سريعة</div>
+    <div class="grid2" style="margin-bottom:4px;">
+      ${quickTabs.map(t=>`<button type="button" class="bs bghost" data-a="tab" data-tab="${t.k}" style="display:flex;align-items:center;gap:8px;justify-content:flex-start;padding:12px;margin-bottom:10px;">
+        <span style="font-size:16px;">${t.ic}</span> ${t.t}
+      </button>`).join('')}
+    </div>`:''}
+
+    <div class="slabel" style="display:flex;justify-content:space-between;align-items:center;">
+      <span>🧾 أحدث الأذونات</span>
+      <span style="color:var(--blue2);cursor:pointer;font-weight:700;text-transform:none;letter-spacing:0;" data-a="tab" data-tab="home">عرض الكل ←</span>
+    </div>
+    <div class="card" style="padding:6px 14px;">
+      ${recent.length?recent.map((o,i)=>{const[sc,scbg]=stageColors(o);return `
+        <div data-a="open" data-id="${o.id}" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 0;${i<recent.length-1?'border-bottom:1px solid var(--line);':''}cursor:pointer;">
+          <div style="min-width:0;"><div style="font-weight:800;font-size:12.5px;color:var(--blue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${otitle(o)}</div><div style="font-size:11px;color:var(--muted);">${o.cname||o.fcname||'-'} · ${new Date(o.createdAt||0).toLocaleDateString('ar-EG',{day:'numeric',month:'short'})}</div></div>
+          <span class="tag" style="background:${scbg};color:${sc};flex-shrink:0;">${stageLabel(o)}</span>
+        </div>`;}).join(''):'<div style="padding:14px 0;color:var(--muted);font-size:12px;text-align:center;">لا يوجد أذونات مسجّلة بعد</div>'}
+    </div>
+
+    <div class="slabel">🕓 آخر النشاطات</div>
+    <div class="card" style="padding:6px 14px;">
+      ${recentActivity.length?recentActivity.map((o,i)=>`
+        <div data-a="open" data-id="${o.id}" style="display:flex;gap:9px;align-items:flex-start;padding:9px 0;${i<recentActivity.length-1?'border-bottom:1px solid var(--line);':''}cursor:pointer;">
+          <span style="font-size:15px;">${actIcon(o)}</span>
+          <div style="min-width:0;"><div style="font-size:12px;font-weight:700;color:var(--blue);">${otitle(o)} — ${stageLabel(o)}</div><div style="font-size:10.5px;color:var(--muted);">${o.cname||o.fcname||''} · ${timeAgoStr(o.updAt||o.createdAt)}</div></div>
+        </div>`).join(''):'<div style="padding:14px 0;color:var(--muted);font-size:12px;text-align:center;">لا يوجد نشاط بعد</div>'}
+    </div>
+  </div>`;
 }
 
 function rHome(){
