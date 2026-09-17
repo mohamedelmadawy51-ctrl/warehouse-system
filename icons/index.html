@@ -2156,6 +2156,17 @@ function schedDateLabel(ds){
   try{const d=new Date(ds+'T00:00:00');return d.toLocaleDateString('ar-EG',{weekday:'short',day:'numeric',month:'short'});}catch(_){return ds;}
 }
 
+// حقل اختيار تاريخ: بنستخدم input[type=date] الأصلي عشان يفتح تقويم الجهاز عند الضغط،
+// لكن بنخفي شكله الرقمي (اللي بيتعرض حسب لغة/منطقة الموبايل نفسه — ممكن يطلع شهر/يوم بدل يوم/شهر ويلخبط)
+// وبنحط فوقه تسمية عربية ثابتة دايماً بصيغة يوم-اسم الشهر-سنة عشان محدش يتلخبط تاني
+function dateChip(id,ds,disabled){
+  const label=ds?schedDateLabel(ds):'اختر تاريخ';
+  return `<div style="position:relative;display:inline-flex;">
+    <input type="date" id="${id}" value="${ds||''}" ${disabled?'disabled':''} style="position:absolute;inset:0;width:100%;height:100%;opacity:0;${disabled?'pointer-events:none;':'cursor:pointer;'}">
+    <div style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:8px;border:1.5px solid var(--line);background:#fff;font-family:inherit;font-weight:700;color:var(--blue2);white-space:nowrap;${disabled?'opacity:.5;':''}">📅 ${label}</div>
+  </div>`;
+}
+
 // رسم شريط التتبع (الوركفلو) بطريقة مستقلة عن اتجاه الصفحة (RTL) عشان الخط يوصل صح بين كل نقطة والتانية
 function drawTracker(steps,idx,rejIdx){
   const n=steps.length;
@@ -2674,7 +2685,7 @@ function rManifest(rn){
 
   return `<div class="manifest-outer">
     <div class="manifest-bar no-print" style="flex-wrap:wrap;">
-      <input type="date" id="mfDate" value="${S.repCalDate||ymd(Date.now())}" ${S.repCalAll?'disabled':''} style="padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
+      ${dateChip('mfDate',S.repCalDate||ymd(Date.now()),S.repCalAll)}
       <button type="button" class="bs ${S.repCalAll?'bgo':'bghost'}" data-a="repcalall">${S.repCalAll?'📅 كل الأيام':'📅 يوم محدد'}</button>
       <input type="text" id="mfSearch" placeholder="🔍 بحث برقم الإذن / العميل / الصنف" value="${S.repSearch||''}" style="flex:1;min-width:160px;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
       <button type="button" class="bs ${routeOn?'bgo':'bghost'}" data-a="mfroute">🧭 ${routeOn?'ترتيب أقرب مسافة: مفعّل':'ترتيب أقرب مسافة: متوقف'}</button>
@@ -2847,7 +2858,7 @@ function rRep(){
     <div class="slabel">📋 تقارير المندوبين</div>
     <div class="card no-print" style="margin-bottom:10px;">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <input type="date" id="repCalInput" value="${S.repCalDate||ymd(Date.now())}" ${S.repCalAll?'disabled':''} style="padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
+        ${dateChip('repCalInput',S.repCalDate||ymd(Date.now()),S.repCalAll)}
         <button type="button" class="bs ${S.repCalAll?'bgo':'bghost'}" data-a="repcalall">${S.repCalAll?'📅 عرض كل الأيام':'📅 تصفية بيوم واحد'}</button>
         <input type="text" id="repSearchInput" placeholder="🔍 بحث برقم الإذن / العميل / الصنف" value="${S.repSearch||''}" style="flex:1;min-width:160px;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
       </div>
