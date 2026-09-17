@@ -1284,6 +1284,7 @@ function addDaysStr(dstr,n){const d=new Date(dstr+'T00:00:00');d.setDate(d.getDa
 let pendAtt=null;
 let pendUPhoto=null;
 let pendCarPhoto=null;
+let pendDlvAtt=null; // صورة/ملف إثبات التسليم اللي المندوب بيرفعه وقت تأكيد التسليم للعميل
 
 // ===== استيراد ملف اكسيل خارجي (الأذن المجمع للمندوب) — طريقة صرف رابعة =====
 const XLS_IMPORT_FIELDS=[
@@ -1485,6 +1486,13 @@ function xlsAutoMatch(headers){
 function parseFlexDate(v){
   if(v==null||v==='')return '';
   if(v instanceof Date&&!isNaN(v))return ymd(v);
+  // احتياطي: لو وصل رقم تسلسلي من إكسل بدل تاريخ حقيقي (نادر مع cellDates:true) — نحوّله بدل ما نعامله كنص
+  if(typeof v==='number'&&isFinite(v)){
+    try{
+      const dc=XLSX.SSF&&XLSX.SSF.parse_date_code(v);
+      if(dc)return ymd(new Date(dc.y,dc.m-1,dc.d));
+    }catch(_){}
+  }
   const s=String(v).trim();
   if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.slice(0,10);
   const m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
@@ -1508,7 +1516,9 @@ async function onXlsFile(e){
     const buf=await file.arrayBuffer();
     const wb=XLSX.read(buf,{type:'array',cellDates:true});
     const ws=wb.Sheets[wb.SheetNames[0]];
-    const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''});
+    // raw:true عشان خلايا التاريخ الحقيقية بالشيت توصلنا ككائن Date فعلي بدل نص منسّق بترتيب أمريكي (شهر/يوم) —
+    // ده اللي كان بيسبب قراءة اليوم والشهر معكوسين لبعض التواريخ الغامضة (زي 03/05)
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
     const headers=(rows[0]||[]).map(h=>xh(h));
     const dataRows=rows.slice(1).filter(r=>r.some(c=>xh(c)!==''));
     if(!headers.length||!dataRows.length){toast('⚠️ الملف فارغ أو لا يحتوي على بيانات');return;}
@@ -1523,13 +1533,16 @@ function xlsContinueToPreview(){
   const missing=XLS_IMPORT_FIELDS.filter(fd=>fd.required&&(xlsImp.mapping[fd.key]==null||xlsImp.mapping[fd.key]<0));
   if(missing.length){toast('⛔ الرجاء تحديد عمود لكل من: '+missing.map(f=>f.label).join('، '));return;}
   const g=(row,key)=>{const idx=xlsImp.mapping[key];return (idx==null||idx<0)?'':xh(row[idx]);};
+  // نمرر قيمة خلية التاريخ الخام (قبل تحويلها لنص) — لو كانت تاريخ Excel حقيقي هتوصل كـ Date صحيح 100%،
+  // ولو كانت نص مكتوب يدوي (زي 17/9/2026) لسه هتتفسّر بنفس ترتيب يوم/شهر الموجود بالشيت
+  const gv=(row,key)=>{const idx=xlsImp.mapping[key];return (idx==null||idx<0)?'':row[idx];};
   const parsed=xlsImp.rawRows.map(row=>({
     rep:g(row,'rep'),carNo:g(row,'carNo'),route:g(row,'route'),soNo:g(row,'soNo'),
     ccode:g(row,'ccode'),cname:g(row,'cname'),sector:g(row,'sector'),priceCat:g(row,'priceCat'),
     whName:g(row,'whName'),labName:g(row,'labName'),
     icode:g(row,'icode'),iname:g(row,'iname'),batch:g(row,'batch'),
-    expiry:parseFlexDate(g(row,'expiry')),qty:+g(row,'qty')||0,unit:g(row,'unit'),
-    note:g(row,'note'),outDate:parseFlexDate(g(row,'outDate')),invDate:parseFlexDate(g(row,'invDate')),retDate:parseFlexDate(g(row,'retDate'))
+    expiry:parseFlexDate(gv(row,'expiry')),qty:+g(row,'qty')||0,unit:g(row,'unit'),
+    note:g(row,'note'),outDate:parseFlexDate(gv(row,'outDate')),invDate:parseFlexDate(gv(row,'invDate')),retDate:parseFlexDate(gv(row,'retDate'))
   })).filter(r=>r.ccode||r.icode||r.rep);
   if(!parsed.length){toast('⚠️ لم يتم العثور على صفوف بيانات صالحة بعد المطابقة');return;}
   const repUsers=DB.users.filter(u=>u.role==='rep');
@@ -2103,7 +2116,8 @@ function forRole(u){
     case 'accounts':list=DB.orders.filter(o=>['pending_accounts','return_pending_acc','customer_return_pending_acc'].includes(o.stage));break;
     case 'cars':list=DB.orders.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars');break;
     case 'warehouse':list=DB.orders.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage));break;
-    case 'rep':list=DB.orders.filter(o=>['pending_rep','with_rep','return_pending_rep'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username));break;
+    // نضيف 'delivered' هنا عشان المندوب يقدر يوصل للأذون المجمعة القديمة اللي خلصت تسليم عن طريق اختيار تاريخها من كالندر الرئيسية، حتى لو معندوش شغل جديد النهاردة
+    case 'rep':list=DB.orders.filter(o=>['pending_rep','with_rep','return_pending_rep','delivered'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username));break;
     case 'admin':list=DB.orders;break;
     case 'quality':list=DB.orders;break;
     default:list=[];
@@ -3297,6 +3311,7 @@ function rOrd(){
   if(o.updAt)flds+=`<div class="kv"><span>آخر تحديث</span><b>${new Date(o.updAt).toLocaleString('ar-EG')}</b></div>`;
   let att='';
   if(o.att){const isImg=o.att.type?.startsWith('image');att=`<div class="slabel">المرفق</div>${isImg?`<img src="${o.att.data}" style="width:100%;border-radius:10px;margin-bottom:8px;" alt="مرفق">`:`<div class="attachprev">📄 ${o.att.name||'مستند مرفق'}</div>`}`;}
+  if(o.dlvAtt){const isImg=o.dlvAtt.type?.startsWith('image');att+=`<div class="slabel">🧾 إثبات التسليم</div>${isImg?`<img src="${o.dlvAtt.data}" style="width:100%;border-radius:10px;margin-bottom:8px;" alt="إثبات التسليم">`:`<div class="attachprev">📄 ${o.dlvAtt.name||'ملف إثبات التسليم'}</div>`}`;}
   // ===== أزرار الإجراءات =====
   let acts = '';
   // زرار الإلغاء للأدمن دائماً في الأعلى
@@ -3383,6 +3398,11 @@ function rOrd(){
           <a href="https://maps.google.com/?q=${l.loc}" target="_blank" style="color:var(--blue2);font-weight:800;white-space:nowrap;">فتح 🗺️</a>
         </div>`).join('')}
       </div>`:''}
+      <div class="labrow">
+        <label class="attachbtn" for="dlvAttInput" style="margin-bottom:${pendDlvAtt?'8px':'0'};">📎 إرفاق صورة أو ملف إثبات التسليم (اختياري)</label>
+        <input type="file" id="dlvAttInput" accept="image/*,.pdf" capture="environment" style="display:none;">
+        <div id="dlvAttPrev">${pendDlvAtt?`<div class="attachprev" style="display:flex;align-items:center;gap:8px;">${(pendDlvAtt.type||'').startsWith('image')?`<img src="${pendDlvAtt.data}" style="width:36px;height:36px;border-radius:8px;object-fit:cover;">`:'📄'} ✅ ${pendDlvAtt.name||''}</div>`:''}</div>
+      </div>
       <div class="brow">
         <button class="bs bgreen" data-a="rdlv" data-id="${o.id}">✅ تأكيد التسليم وتسجيل الموقع</button>
       </div>`;
@@ -3698,6 +3718,7 @@ function bind(){
   const mfd=document.getElementById('mfDate');if(mfd)mfd.addEventListener('change',()=>{S.repCalDate=mfd.value;render();});
   const mfs=document.getElementById('mfSearch');if(mfs)mfs.addEventListener('input',()=>{S.repSearch=mfs.value;debouncedRender(()=>{render();const e2=document.getElementById('mfSearch');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});});
   const af=document.getElementById('atf');if(af)af.addEventListener('change',onAtt);
+  const daf=document.getElementById('dlvAttInput');if(daf)daf.addEventListener('change',onDlvAtt);
   const upf=document.getElementById('upf');if(upf)upf.addEventListener('change',onUPhoto);
   const aurole=document.getElementById('aurole');
   if(aurole){
@@ -3872,6 +3893,20 @@ async function onAtt(e){
   r.readAsDataURL(file);
 }
 
+// إرفاق صورة/ملف إثبات وقت تسليم المندوب للعميل (اختياري) — نفس فكرة onAtt بالظبط بس لمرحلة التسليم
+async function onDlvAtt(e){
+  const file=e.target.files[0];if(!file)return;
+  if(file.size>4*1024*1024){toast('الملف أكبر من 4MB — اختر ملفاً أصغر');return;}
+  const r=new FileReader();
+  r.onload=ev=>{
+    pendDlvAtt={data:ev.target.result,name:file.name,type:file.type};
+    const p=document.getElementById('dlvAttPrev');
+    const isImg=file.type.startsWith('image');
+    if(p)p.innerHTML=`<div class="attachprev" style="display:flex;align-items:center;gap:8px;">${isImg?`<img src="${pendDlvAtt.data}" style="width:36px;height:36px;border-radius:8px;object-fit:cover;">`:'📄'} ✅ ${file.name}</div>`;
+  };
+  r.readAsDataURL(file);
+}
+
 async function onUPhoto(e){
   const file=e.target.files[0];if(!file)return;
   if(!file.type.startsWith('image/')){toast('الرجاء اختيار صورة');return;}
@@ -3936,7 +3971,7 @@ function onAInner(e){
   else if(a==='cntlog'){S.cntLogCode=el.dataset.cnt;S.tab='cntlog';render();}
   else if(a==='qc'){doQC(id);}
   else if(a==='logout'){stopAmbient();S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
-  else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;xlsImp=null;S.balDetailCust=null;render();}
+  else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;pendDlvAtt=null;xlsImp=null;S.balDetailCust=null;render();}
   else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;if(el.dataset.type!=='excel_import')xlsImp=null;render();}
   else if(a==='xls-continue'){xlsContinueToPreview();}
   else if(a==='xls-back'){if(xlsImp)xlsImp.step='map';render();}
@@ -3988,8 +4023,8 @@ function onAInner(e){
   else if(a==='calday'){S.calDate=el.dataset.date;S.calAll=false;render();}
   else if(a==='calweek'){S.calDate=addDaysStr(S.calDate||ymd(Date.now()),7*(+el.dataset.dir));render();}
   else if(a==='calall'){S.calAll=!S.calAll;render();}
-  else if(a==='open'){S.oid=id;S.tab='order';render();}
-  else if(a==='back'){S.tab='home';S.oid=null;render();}
+  else if(a==='open'){S.oid=id;S.tab='order';pendDlvAtt=null;render();}
+  else if(a==='back'){S.tab='home';S.oid=null;pendDlvAtt=null;render();}
   else if(a==='rrng'){S.rng=el.dataset.rng;render();}
   else if(a==='fwd'){doFwd(id);}
   else if(a==='appr'){doAppr(id);}
@@ -4335,6 +4370,7 @@ async function doRDlv(id){
     o.dlvQty=dlvQty;
     o.retQty=retQty;
     o.dloc=loc||null;
+    if(pendDlvAtt)o.dlvAtt=pendDlvAtt; // إثبات التسليم (صورة/ملف) لو المندوب رفع واحد
     if(loc)await saveCustDeliveryLocation(o.ccode,loc,o.labName||o.cname||'');
     if(o.kind==='withdrawal'&&o.orderType==='amanah'){
       // نلتقط "الرصيد قبل الصرف" و"الخطة الافتراضية" (لو اتصرفت من رصيد نفس العميل بس، من غير تبادل) قبل أي تعديل — للمقارنة في التقرير
@@ -4392,6 +4428,7 @@ async function doRDlv(id){
     if(o.fefoShortfall>0){
       msg+=` — ⚠️ تعذّر توفير ${o.fefoShortfall} من الكمية لأن باقي رصيد هذا الصنف منتهي الصلاحية ولا يجوز الصرف منه`;
     }
+    pendDlvAtt=null;
     toast(msg);S.tab='home';S.oid=null;render();
   };
 
