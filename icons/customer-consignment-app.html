@@ -581,7 +581,8 @@ async function saveCustDeliveryLocation(ccode,loc,placeLabel){
   DB.custLocations[ccode]=DB.custLocations[ccode]||[];
   const list=DB.custLocations[ccode];
   // لو الموقع الجديد قريب (أقل من 150 متر) من مكان محفوظ قبل كده لنفس العميل، نعتبره نفس المكان ونحدّثه بدل ما نكرره
-  let match=list.find(l=>haversineM(l.loc,loc)<150);
+  // نطاق الدمج بقى 1 كم بدل 150 متر — عشان الفروق الصغيرة في GPS (خطوة واحدة) متعملش أماكن مكرّرة لنفس العميل
+  let match=list.find(l=>haversineM(l.loc,loc)<1000);
   if(match){
     match.count=(match.count||1)+1;match.lastAt=Date.now();match.loc=loc;
     if(placeLabel&&!match.placeLabel)match.placeLabel=placeLabel;
@@ -598,6 +599,30 @@ async function saveCustDeliveryLocation(ccode,loc,placeLabel){
   }
 }
 function custLocationsFor(ccode){return(DB.custLocations&&DB.custLocations[ccode])?[...DB.custLocations[ccode]].sort((a,b)=>(b.lastAt||0)-(a.lastAt||0)):[];}
+// دمج أي مواقع محفوظة قريبة من بعض (أقل من 1 كم) لنفس العميل في مكان واحد — تنظيف لأي تكرار قديم اتسجل قبل رفع نطاق الدمج
+function mergeNearbyCustLocations(){
+  let changed=false;
+  Object.keys(DB.custLocations||{}).forEach(cc=>{
+    const list=DB.custLocations[cc];
+    if(!list||list.length<2)return;
+    const merged=[];
+    list.forEach(loc=>{
+      const existing=merged.find(m=>haversineM(m.loc,loc.loc)<1000);
+      if(existing){
+        existing.count=(existing.count||1)+(loc.count||1);
+        existing.lastAt=Math.max(existing.lastAt||0,loc.lastAt||0);
+        existing.firstAt=Math.min(existing.firstAt||Date.now(),loc.firstAt||Date.now());
+        if(!existing.placeLabel&&loc.placeLabel)existing.placeLabel=loc.placeLabel;
+        if(!existing.region&&loc.region)existing.region=loc.region;
+        changed=true;
+      } else {
+        merged.push({...loc});
+      }
+    });
+    if(merged.length!==list.length){DB.custLocations[cc]=merged;changed=true;}
+  });
+  return changed;
+}
 // أفضل موقع محفوظ لعميل معيّن (الأكتر استخدامًا، وعند التعادل الأحدث)
 function bestCustLoc(ccode){
   const locs=custLocationsFor(ccode);
@@ -906,6 +931,8 @@ async function loadDB(){
   let labsMigrated=false;
   (DB.labs||[]).forEach(l=>{if((!l.custCodes||!l.custCodes.length)&&l.custCode){l.custCodes=[l.custCode];labsMigrated=true;}});
   if(labsMigrated)await svla();
+  // تنظيف أي مواقع تسليم محفوظة قريبة من بعض جدًا لنفس العميل (أقل من 1 كم) ودمجها في مكان واحد
+  if(mergeNearbyCustLocations())await svcloc();
   // ترحيل أرصدة المعامل القديمة: كان المفتاح "معمل|صنف[|تشغيلة]" (عميل واحد ضمنيًا)، بقى لازم "معمل|عميل|صنف[|تشغيلة]" عشان نفرّق بين عملاء المعمل الواحد
   let lbMigrated=false;
   const newLB={};
