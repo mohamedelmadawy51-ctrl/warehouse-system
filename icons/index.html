@@ -598,6 +598,30 @@ async function saveCustDeliveryLocation(ccode,loc,placeLabel){
   }
 }
 function custLocationsFor(ccode){return(DB.custLocations&&DB.custLocations[ccode])?[...DB.custLocations[ccode]].sort((a,b)=>(b.lastAt||0)-(a.lastAt||0)):[];}
+// أفضل موقع محفوظ لعميل معيّن (الأكتر استخدامًا، وعند التعادل الأحدث)
+function bestCustLoc(ccode){
+  const locs=custLocationsFor(ccode);
+  if(!locs.length)return null;
+  return[...locs].sort((a,b)=>(b.count||0)-(a.count||0)||(b.lastAt||0)-(a.lastAt||0))[0];
+}
+// ترتيب "أقرب فالأقرب" (Nearest-Neighbor) لمجموعة محطات (كل محطة = عميل بمواقعه المحفوظة)
+// بيرجع: {stops: [نفس المحطات بترتيب الزيارة المقترح], totalKm, unlocated: [محطات بدون موقع محفوظ اتحطت آخر القائمة]}
+function optimizeRoute(stops){
+  const located=stops.filter(s=>s.loc);
+  const unlocated=stops.filter(s=>!s.loc);
+  if(located.length<2)return{ordered:[...located,...unlocated],totalKm:0,unlocated};
+  const remaining=[...located];
+  const ordered=[remaining.shift()];
+  let totalM=0;
+  while(remaining.length){
+    const cur=ordered[ordered.length-1];
+    let bestIdx=0,bestDist=Infinity;
+    remaining.forEach((s,i)=>{const d=haversineM(cur.loc,s.loc);if(d<bestDist){bestDist=d;bestIdx=i;}});
+    totalM+=bestDist;
+    ordered.push(remaining.splice(bestIdx,1)[0]);
+  }
+  return{ordered:[...ordered,...unlocated],totalKm:totalM/1000,unlocated};
+}
 
 let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[],custLocations:{}};
 
@@ -2586,21 +2610,46 @@ function rManifest(rn){
   const carPhoto=carOrd?carOrd.carPhoto:'';
   const driverPhoto=(drvUser&&drvUser.photo)?drvUser.photo:(carOrd?carOrd.driverPhoto:'');
   const now=new Date();
+
+  // ترتيب المحطات (العملاء) حسب أقرب مسافة فعلية بين بعض، بالاعتماد على مواقع التسليم المحفوظة سابقًا
+  const routeOn=S.mfRouteOpt!==false;
+  let orderedOrds=myOrds,stopNo={},totalKm=0,locatedStops=0,totalStops=0;
+  if(routeOn){
+    const stopsMap={};
+    myOrds.forEach(o=>{
+      const k=o.ccode||o.cname||'?';
+      if(!stopsMap[k])stopsMap[k]={ccode:o.ccode,cname:o.cname,loc:bestCustLoc(o.ccode)?.loc||null,orders:[]};
+      stopsMap[k].orders.push(o);
+    });
+    const stops=Object.values(stopsMap);
+    totalStops=stops.length;locatedStops=stops.filter(s=>s.loc).length;
+    const res=optimizeRoute(stops);
+    totalKm=res.totalKm;
+    orderedOrds=[];
+    res.ordered.forEach((s,i)=>{s.orders.forEach(o=>{stopNo[o.id]=i+1;orderedOrds.push(o);});});
+  } else {
+    myOrds.forEach((o,i)=>{stopNo[o.id]=i+1;});
+  }
+
   return `<div class="manifest-outer">
     <div class="manifest-bar no-print" style="flex-wrap:wrap;">
       <input type="date" id="mfDate" value="${S.repCalDate||ymd(Date.now())}" ${S.repCalAll?'disabled':''} style="padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
       <button type="button" class="bs ${S.repCalAll?'bgo':'bghost'}" data-a="repcalall">${S.repCalAll?'📅 كل الأيام':'📅 يوم محدد'}</button>
       <input type="text" id="mfSearch" placeholder="🔍 بحث برقم الإذن / العميل / الصنف" value="${S.repSearch||''}" style="flex:1;min-width:160px;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line);font-family:inherit;">
+      <button type="button" class="bs ${routeOn?'bgo':'bghost'}" data-a="mfroute">🧭 ${routeOn?'ترتيب أقرب مسافة: مفعّل':'ترتيب أقرب مسافة: متوقف'}</button>
       <button type="button" class="bs bghost" data-a="back-manifest">◀ رجوع</button>
       <button type="button" class="bs bgo" data-a="pdf">🖨️ طباعة</button>
     </div>
+    ${routeOn&&totalStops>1?`<div class="no-print" style="max-width:1400px;margin:0 auto 10px;background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 14px;font-size:11.5px;color:var(--blue2);font-weight:700;">
+      🧭 تم ترتيب ${totalStops} محطة حسب أقرب مسافة${locatedStops<totalStops?` — ${locatedStops} منهم بموقع محفوظ (الباقي ${totalStops-locatedStops} بدون موقع اتحطوا آخر الترتيب)`:''}${totalKm>0?` — إجمالي مسافة الجولة التقديرية: <b>${totalKm.toFixed(1)} كم</b>`:''}
+    </div>`:''}
     <div class="mpaper">
       <div class="mhead">
         <div class="mh-l">
           <img src="${LOGO}" alt="IFT">
           <div><h2>كشف تحرك مندوب</h2><div class="mh-sub">IFT CORPORATION — بضاعة الأمانة</div></div>
         </div>
-        <div class="mh-r">تاريخ الطباعة: ${now.toLocaleDateString('ar-EG')}<br>عدد الأوردرات: ${myOrds.length}${S.repCalAll?'':' — ليوم '+schedDateLabel(S.repCalDate||ymd(Date.now()))}</div>
+        <div class="mh-r">تاريخ الطباعة: ${now.toLocaleDateString('ar-EG')}<br>عدد الأوردرات: ${myOrds.length}${S.repCalAll?'':' — ليوم '+schedDateLabel(S.repCalDate||ymd(Date.now()))}${routeOn&&totalKm>0?'<br>مسافة الجولة التقديرية: '+totalKm.toFixed(1)+' كم':''}</div>
       </div>
       <div class="mdrv">
         <div class="mdrv-card">
@@ -2613,9 +2662,9 @@ function rManifest(rn){
         </div>
       </div>
       <table class="mtbl">
-        <thead><tr><th>#</th><th>رقم الإذن</th><th>تاريخ الأوردر</th><th>القطاع</th><th>فئة البيع</th><th>كود العميل</th><th>اسم العميل</th><th>المعمل</th><th>كود الصنف</th><th>اسم الصنف</th><th>التشغيلة</th><th>تاريخ الانتهاء</th><th>الكمية</th><th>الوحدة</th><th>ملاحظات</th></tr></thead>
-        <tbody>${myOrds.length?myOrds.map((o,i)=>`<tr>
-          <td>${i+1}</td>
+        <thead><tr><th>${routeOn?'محطة':'#'}</th><th>رقم الإذن</th><th>تاريخ الأوردر</th><th>القطاع</th><th>فئة البيع</th><th>كود العميل</th><th>اسم العميل</th><th>المعمل</th><th>كود الصنف</th><th>اسم الصنف</th><th>التشغيلة</th><th>تاريخ الانتهاء</th><th>الكمية</th><th>الوحدة</th><th>ملاحظات</th></tr></thead>
+        <tbody>${orderedOrds.length?orderedOrds.map((o)=>`<tr>
+          <td>${stopNo[o.id]||'-'}</td>
           <td>${o.inv||'-'}</td>
           <td>${schedDateLabel(orderDateStr(o))}</td>
           <td>${o.sectorName||sname(o.sector)||'-'}</td>
@@ -2768,7 +2817,32 @@ function rRep(){
       const repNames=[...new Set(DB.orders.filter(o=>o.repName).map(o=>o.repName.trim()))];
       const myReps=u.role==='rep'?repNames.filter(rn=>rn===u.name||rn===u.username):repNames;
       if(!myReps.length)return `<div class="card" style="text-align:center;color:var(--muted);padding:16px;">لا توجد بيانات مناديب</div>`;
-      return myReps.map(rn=>{
+      // لوحة تقييم سريعة (للإدارة فقط لو أكتر من مندوب): ترتيب المناديب حسب الأداء
+      let leaderboard='';
+      if(u.role!=='rep'&&myReps.length>1){
+        const stats=myReps.map(rn=>{
+          const ords=repOrdsFiltered(rn);
+          const dl=ords.filter(o=>o.stage==='delivered'&&!o.retQty).length;
+          const pr=ords.filter(o=>o.stage==='delivered'&&o.retQty>0);
+          const dTot=dl+pr.length;
+          const sRate=dTot>0?Math.round((dl/dTot)*100):null;
+          const qty=ords.filter(o=>o.stage==='delivered').reduce((s,o)=>s+(+(o.dlvQty||o.qty)||0),0);
+          const pend=ords.filter(o=>['pending_rep','with_rep'].includes(o.stage)).length;
+          return{rn,qty,sRate,pend,dTot};
+        }).sort((a,b)=>b.qty-a.qty);
+        const medals=['🥇','🥈','🥉'];
+        leaderboard=`<div class="card" style="margin-bottom:10px;background:linear-gradient(135deg,#fff,var(--blue-lg));">
+          <div style="font-weight:800;font-size:13px;margin-bottom:10px;font-family:'Space Grotesk','Cairo',sans-serif;">🏆 لوحة تقييم المناديب</div>
+          ${stats.map((s,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;${i<stats.length-1?'border-bottom:1px solid var(--line);':''}">
+            <span style="font-size:15px;width:22px;text-align:center;">${medals[i]||'#'+(i+1)}</span>
+            <span style="flex:1;font-weight:700;font-size:12px;">${s.rn}</span>
+            ${s.sRate!==null?`<span class="tag" style="background:${s.sRate>=90?'var(--ok-bg)':s.sRate>=70?'var(--warn-bg)':'var(--bad-bg)'};color:${s.sRate>=90?'var(--ok)':s.sRate>=70?'var(--warn)':'var(--bad)'};">${s.sRate}%</span>`:''}
+            <span style="font-size:11px;color:var(--muted);white-space:nowrap;">📦 ${s.qty}</span>
+            ${s.pend>0?`<span style="font-size:10px;color:var(--warn);white-space:nowrap;">⏳${s.pend}</span>`:''}
+          </div>`).join('')}
+        </div>`;
+      }
+      return leaderboard+myReps.map(rn=>{
         const myOrds=repOrdsFiltered(rn);
         const delivered=myOrds.filter(o=>o.stage==='delivered'&&!o.retQty).length;
         const partial=myOrds.filter(o=>o.stage==='delivered'&&o.retQty>0);
@@ -2778,11 +2852,26 @@ function rRep(){
         const totalDlv=myOrds.filter(o=>o.stage==='delivered').reduce((s,o)=>s+(+(o.dlvQty||o.qty)||0),0);
         const openBox=(S.repBoxOpen&&S.repBoxOpen.rep===rn)?S.repBoxOpen.box:null;
         const boxRows=openBox?repBoxRows(rn,openBox):[];
+        // مؤشرات أداء احترافية: نسبة التسليم الكامل من أول مرة + إجمالي مسافة التنقل الفعلية بين نقاط التسليم الحقيقية (GPS)
+        const deliveredTotal=delivered+partial.length;
+        const successRate=deliveredTotal>0?Math.round((delivered/deliveredTotal)*100):null;
+        const dlvWithLoc=myOrds.filter(o=>o.stage==='delivered'&&o.dloc&&o.updAt).sort((a,b)=>(a.updAt||0)-(b.updAt||0));
+        let repKm=0;for(let i=1;i<dlvWithLoc.length;i++)repKm+=haversineM(dlvWithLoc[i-1].dloc,dlvWithLoc[i].dloc)/1000;
         return `<div class="card" style="margin-bottom:10px;">
           <div class="ch">
             <div><div class="ctitle">🧍 ${rn}</div></div>
             <span class="tag ta">${delivered+partial.length} مُسلَّم</span>
           </div>
+          ${(successRate!==null||repKm>0)?`<div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;">
+            ${successRate!==null?`<div style="flex:1;min-width:120px;background:${successRate>=90?'var(--ok-bg)':successRate>=70?'var(--warn-bg)':'var(--bad-bg)'};border-radius:9px;padding:8px 10px;">
+              <div style="font-size:9.5px;color:var(--muted);font-weight:700;">🎯 نسبة التسليم الكامل</div>
+              <div style="font-size:17px;font-weight:900;color:${successRate>=90?'var(--ok)':successRate>=70?'var(--warn)':'var(--bad)'};">${successRate}%</div>
+            </div>`:''}
+            ${repKm>0?`<div style="flex:1;min-width:120px;background:var(--blue-lg);border-radius:9px;padding:8px 10px;">
+              <div style="font-size:9.5px;color:var(--muted);font-weight:700;">📏 مسافة التنقل الفعلية (GPS)</div>
+              <div style="font-size:17px;font-weight:900;color:var(--blue2);">${repKm.toFixed(1)} كم</div>
+            </div>`:''}
+          </div>`:''}
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-top:8px;text-align:center;">
             <div style="background:var(--ok-bg);border-radius:9px;padding:8px;cursor:pointer;${openBox==='delivered'?'outline:2px solid var(--ok);':''}" data-a="repbox" data-rep="${rn}" data-box="delivered">
               <div style="font-size:18px;font-weight:900;color:var(--ok)">${delivered}</div>
@@ -3795,7 +3884,7 @@ function onA(e){
 function onAInner(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -3829,6 +3918,7 @@ function onAInner(e){
   else if(a==='md-cancel'){mdImp=null;S.pageShow.mdItemPreview=undefined;S.pageShow.mdCustPreview=undefined;render();}
   else if(a==='md-confirm'){mdConfirmImport();}
   else if(a==='repcalall'){S.repCalAll=!S.repCalAll;render();}
+  else if(a==='mfroute'){S.mfRouteOpt=!(S.mfRouteOpt!==false);render();}
   else if(a==='loadmore'){const key=el.dataset.key,size=+el.dataset.size||50;S.pageShow[key]=(S.pageShow[key]||size)+size;render();}
   else if(a==='baldetail'){S.balDetailCust=el.dataset.cc;render();}
   else if(a==='back-baldetail'){S.balDetailCust=null;render();}
