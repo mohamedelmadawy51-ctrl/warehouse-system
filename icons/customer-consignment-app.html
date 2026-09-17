@@ -517,9 +517,58 @@ function startRealTimeSync(){
     const val=snap.val();
     if(val!==null){ DB.settings=val; }
   });
+  // سجل تعديلات المندوب/السيارة/الإذن المجمع — تحديث لحظي + إشعار فوري لمدير النظام عند وصول تعديل جديد من غيره
+  FDB.ref(ROOT+'ift_editlog').on('value', snap=>{
+    const val=snap.val();
+    if(val!==null){
+      const prevLen=(DB.editLog||[]).length;
+      const arr=Array.isArray(val)?val:Object.values(val);
+      DB.editLog=arr;
+      if(S.screen==='app'&&S.user&&S.user.role==='admin'&&arr.length>prevLen){
+        const newest=arr.slice().sort((a,b)=>(b.at||0)-(a.at||0))[0];
+        if(newest&&newest.byUser!==S.user.username){
+          fireNotif('🔧 تعديل جديد على أوردر/مندوب',(newest.label||'')+' — السبب: '+(newest.reason||'بدون سبب'),(newest.orderIds&&newest.orderIds[0])||null);
+          playNotifSound();
+        }
+        updateBellBadge();
+        if(S.tab==='edits')render();
+      }
+    }
+  });
 }
 function repOptions(){const set=new Set();DB.users.filter(u=>u.role==='rep').forEach(u=>set.add((u.name||'').trim()));DB.orders.forEach(o=>{if(o.repName)set.add(o.repName.trim());});return[...set].filter(Boolean).sort((a,b)=>a.localeCompare(b,'ar'));}
 function carOptions(){const set=new Set();DB.orders.forEach(o=>{if(o.carNo)set.add(o.carNo.trim());});return[...set].filter(Boolean).sort((a,b)=>a.localeCompare(b,'ar'));}
+
+/* ===== تعديلات الأوردرات / المندوب / الإذن المجمع (بعد سحب الشيت) — مع سبب إلزامي وإشعار لمدير النظام ===== */
+// كل الأوردرات اللي لسه "شغل حالي" مع مندوب معيّن (قيد التنفيذ أو معاه فعليًا ولسه ما اتسلّمتش) — دي اللي بتتنقل لو غيّرنا مندوبه
+function activeRepOrders(repName){
+  const rn=(repName||'').trim();if(!rn)return[];
+  return DB.orders.filter(o=>['pending_rep','with_rep'].includes(o.stage)&&(o.repName||'').trim()===rn);
+}
+// تجميع أوردرات الإذن المجمع (المستوردة من إكسيل) اللي لسه قيد التنفيذ، كل ملف+مندوب مجموعة مستقلة تمثّل "الإذن المجمع" اللي اتسحب
+function importBatchGroups(){
+  const map=new Map();
+  DB.orders.filter(o=>o.orderType==='excel'&&['pending_rep','with_rep'].includes(o.stage)).forEach(o=>{
+    const k=(o.xlsFileName||'-')+'|'+(o.xlsImportedAt||0)+'|'+(o.repName||'');
+    if(!map.has(k))map.set(k,{key:k,fileName:o.xlsFileName,importedAt:o.xlsImportedAt,repName:o.repName,carNo:o.carNo,orders:[]});
+    map.get(k).orders.push(o);
+  });
+  return[...map.values()].sort((a,b)=>(b.importedAt||0)-(a.importedAt||0));
+}
+// تسجيل عملية تعديل في سجل عام يظهر لمدير النظام (بالسبب) — تُحفظ في قاعدة البيانات مع باقي الجداول
+async function logEditEntry(obj){
+  const u=S.user;
+  DB.editLog=DB.editLog||[];
+  DB.editLog.push(Object.assign({id:uid('edt'),at:Date.now(),byUser:u?u.username:'',byName:u?u.name:'',byRole:u?u.role:''},obj));
+  await svel();
+}
+// التعديلات اللي لسه "جديدة" على مدير النظام ولسه ما شافهاش (بتُستخدم في عداد الجرس ولوحة الإشعارات)
+function unseenEditsForAdmin(){
+  const u=S.user;
+  if(!u||u.role!=='admin')return[];
+  const seenAt=Number(localStorage.getItem('ift_editlog_seen_at')||0);
+  return(DB.editLog||[]).filter(x=>(x.at||0)>seenAt&&x.byUser!==u.username).sort((a,b)=>(b.at||0)-(a.at||0));
+}
 function sname(code){const s=DB.sectors.find(x=>x.code===code);return s?s.name:'';}
 function lname(code){const l=DB.labs.find(x=>x.code===code);return l?l.name:'';}
 function cnname(code){const c=DB.counters.find(x=>x.code===code);return c?(c.name?c.code+' — '+c.name:c.code):'';}
@@ -649,7 +698,7 @@ function optimizeRoute(stops){
   return{ordered:[...ordered,...unlocated],totalKm:totalM/1000,unlocated};
 }
 
-let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[],custLocations:{}};
+let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[],custLocations:{},editLog:[]};
 
 /* ============================================================
    نظام الخلفيات الديناميكية — IFT Veterinary
@@ -906,6 +955,7 @@ async function loadDB(){
     ['settings','ift_settings',{n2DailyLossPct:3,n2MinThreshold:10}],
     ['cars','ift_cars',[]],
     ['custLocations','ift_custLocations',{}],
+    ['editLog','ift_editlog',[]],
   ];
   // قراءة بيانات المستخدمين بشكل حرج ومنفصل (مع إعادة محاولة) — أهم بيانات في النظام ولازم لا نخطئ في التعامل معها
   dbLoadError=false;
@@ -967,6 +1017,7 @@ async function svclm(){await dbSet('ift_counterLabMeta',DB.counterLabMeta);}
 async function svst(){await dbSet('ift_settings',DB.settings);}
 async function svcar(){await dbSet('ift_cars',DB.cars);}
 async function svcloc(){await dbSet('ift_custLocations',DB.custLocations);}
+async function svel(){await dbSet('ift_editlog',DB.editLog);}
 let BAL_VERSION=0; // يترفع كل مرة تتغيّر فيها أرصدة الأمانة — بيُستخدم لتفريغ الكاش بدل إعادة حساب كل حاجة من الصفر كل مرة
 
 // ===== ترحيل تخزين الأوردرات من "مصفوفة واحدة" إلى "عنصر مستقل لكل أوردر بمفتاحه الثابت id" (مرة واحدة فقط) =====
@@ -1265,7 +1316,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:''};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -2007,6 +2058,7 @@ function getTabs(){
   if(r==='data_entry'||r==='admin')all.push({k:'new',ic:'➕',t:'جديد'},{k:'transfer',ic:'🔁',t:'تحويل'});
   if(['admin','data_entry','accounts'].includes(r))all.push({k:'bal',ic:'💳',t:'الأرصدة'});
   all.push({k:'rep',ic:'📊',t:'التقارير'});
+  if(['admin','cars'].includes(r))all.push({k:'edits',ic:'✏️',t:'تعديلات'});
   if(r==='admin')all.push({k:'adm',ic:'⚙️',t:'الإدارة'});
   return all;
 }
@@ -2024,6 +2076,7 @@ function rShell(){
   else if(S.tab==='order')body=rOrd();
   else if(S.tab==='cntlog')body=rCntLog();
   else if(S.tab==='labcnt')body=rLabCounters();
+  else if(S.tab==='edits')body=rEdits();
   return `
   <div class="topbar">
     <div class="brand"><img class="tlogo" src="${LOGO}" alt="IFT">${u.photo?`<img src="${u.photo}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1.5px solid rgba(255,255,255,.4);">`:''}<div><div class="tname">${u.name}</div><div class="trole">${RLBL[u.role]}</div></div></div>
@@ -2054,7 +2107,7 @@ function myPendingTasks(u,list){
 }
 function updateBellBadge(){
   const b=document.getElementById('notifBadge');if(!b)return;
-  const n=myPendingTasks(S.user).length;
+  const n=myPendingTasks(S.user).length+unseenEditsForAdmin().length;
   if(n>0){b.textContent=n>99?'99+':String(n);b.style.display='block';}
   else{b.style.display='none';}
 }
@@ -2067,11 +2120,23 @@ function rNotifPanel(){
     else if(Notification.permission==='denied')permMsg='<span style="color:var(--bad);font-weight:700;">⛔ إشعارات المتصفح محظورة — فعّلها من إعدادات المتصفح</span>';
     else permMsg='<span style="color:var(--warn);font-weight:700;">🔔 اضغط هنا لتفعيل إشعارات المتصفح</span>';
   }
+  const edits=unseenEditsForAdmin().slice(0,20);
   return`<div id="notifPanel" style="position:fixed;top:64px;left:12px;right:12px;max-width:420px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.28);z-index:999;max-height:70vh;overflow:auto;">
     <div style="padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;">
       <b>🔔 مهامك بانتظارك (${tasks.length})</b>
       <button data-a="notifclose" style="background:none;border:none;font-size:16px;cursor:pointer;color:var(--muted);">✕</button>
     </div>
+    ${edits.length?`<div style="padding:10px 14px;border-bottom:2px solid var(--warn);background:var(--warn-bg);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <b style="font-size:12.5px;">🔧 تعديلات جديدة على المندوب/السيارة (${edits.length})</b>
+        <button data-a="editmarkread" style="background:none;border:none;font-size:11px;color:var(--blue2);font-weight:700;cursor:pointer;">تعليم كمقروء</button>
+      </div>
+      ${edits.map(x=>`<div data-a="notifeditopen" data-id="${(x.orderIds&&x.orderIds[0])||''}" style="padding:6px 0;border-top:1px solid rgba(0,0,0,.06);cursor:pointer;">
+        <div style="font-weight:700;font-size:12px;">${x.label||''}</div>
+        <div style="font-size:10.5px;color:var(--muted);">بواسطة ${x.byName||x.byUser||'-'} · ${new Date(x.at).toLocaleString('ar-EG')}</div>
+        <div style="font-size:10.5px;color:var(--warn);font-weight:700;">السبب: ${x.reason||'-'}</div>
+      </div>`).join('')}
+    </div>`:''}
     ${permMsg?`<div style="padding:8px 14px;font-size:11px;cursor:${(window.Notification&&Notification.permission==='default')?'pointer':'default'};" ${(window.Notification&&Notification.permission==='default')?'data-a="notifperm"':''}>${permMsg}</div>`:''}
     ${tasks.length===0?'<div style="padding:20px;text-align:center;color:var(--muted);">لا توجد مهام بانتظارك حالياً 🎉</div>':tasks.map(o=>`
       <div data-a="notifitem" data-id="${o.id}" style="padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;">
@@ -3829,6 +3894,245 @@ function rAdm(){return`
     </div>`).join(''):`<div style="font-size:11.5px;color:var(--muted);">لا توجد سيارات مسجّلة بعد</div>`}
   </div>`;}
 
+/* ===== شاشة تعديلات الأوردرات / المندوب / الإذن المجمع بالكامل (بعد سحب الشيت) ===== */
+function rEdits(){
+  const view=S.editView||'order';
+  const nav=`<div class="brow" style="margin-bottom:10px;flex-wrap:wrap;gap:6px;">
+    <button class="bs ${view==='order'?'bgo':'bghost'}" data-a="editview" data-v="order" type="button">📦 تعديل أوردر منفرد</button>
+    <button class="bs ${view==='rep'?'bgo':'bghost'}" data-a="editview" data-v="rep" type="button">🧍 نقل من مندوب لآخر</button>
+    <button class="bs ${view==='batch'?'bgo':'bghost'}" data-a="editview" data-v="batch" type="button">📥 تعديل إذن مجمع بالكامل</button>
+    <button class="bs ${view==='log'?'bgo':'bghost'}" data-a="editview" data-v="log" type="button">🕓 سجل التعديلات</button>
+  </div>`;
+  let body='';
+  if(view==='order')body=rEditOrderView();
+  else if(view==='rep')body=rEditRepView();
+  else if(view==='batch')body=rEditBatchView();
+  else body=rEditLogView();
+  return `<div class="stitle">تعديلات الأوردرات والمندوبين</div>
+  <div class="ssub">تعديل مندوب/سيارة أوردر واحد، أو نقل كل حمولة مندوب لمندوب آخر، أو تعديل إذن مجمع كامل — لازم سبب لكل تعديل ويوصل إشعار فوري لمدير النظام</div>
+  <div class="content">${nav}${body}</div>`;
+}
+function rEditOrderView(){
+  const sel=S.editSelOid?DB.orders.find(o=>o.id===S.editSelOid):null;
+  if(sel){
+    const repOpts=repOptions();
+    const curRep=(sel.repName||'').trim(),curCar=(sel.carNo||'').trim();
+    const repIsOther=curRep&&!repOpts.includes(curRep);
+    const carOpts=DB.cars.map(c=>c.carNo);
+    const carIsOther=curCar&&!carOpts.includes(curCar);
+    return `<div class="card">
+      <div class="ch"><div><div class="ctitle">${sel.cname||sel.ccode||''}</div><div class="cmeta">${sel.iname||sel.icode||''} · SO: ${sel.inv||'-'} · الكمية: ${sel.qty||''}</div></div>
+      <button class="bs bghost" data-a="editclearsel" type="button">✕ رجوع للقائمة</button></div>
+      <div class="kv"><span>المندوب الحالي</span><b>${sel.repName||'-'}</b></div>
+      <div class="kv"><span>السيارة الحالية</span><b>${sel.carNo||'-'}</b></div>
+      ${sel.editHistory&&sel.editHistory.length?`<div class="kv"><span>عدد التعديلات السابقة</span><b>${sel.editHistory.length}</b></div>`:''}
+      <form id="editorderf" data-id="${sel.id}">
+        <div class="row2">
+          <div class="field"><label>المندوب الجديد</label>
+            <select name="rnSel" id="eoRnSel">
+              <option value="">بدون تغيير</option>
+              ${repOpts.map(r=>`<option value="${r}" ${r===curRep?'selected':''}>${r}</option>`).join('')}
+              <option value="__other__" ${repIsOther?'selected':''}>➕ اسم آخر...</option>
+            </select>
+            <input name="rnOther" id="eoRnOther" placeholder="اكتب اسم المندوب" value="${repIsOther?curRep:''}" style="margin-top:6px;display:${repIsOther?'block':'none'};">
+          </div>
+          <div class="field"><label>السيارة الجديدة</label>
+            <select name="cnSel" id="eoCnSel">
+              <option value="">بدون تغيير</option>
+              ${DB.cars.map(c=>`<option value="${c.carNo}" ${c.carNo===curCar?'selected':''}>🚗 ${c.carNo}</option>`).join('')}
+              <option value="__other__" ${carIsOther?'selected':''}>➕ رقم غير مسجّل...</option>
+            </select>
+            <input name="cnOther" id="eoCnOther" placeholder="اكتب رقم العربية" value="${carIsOther?curCar:''}" style="margin-top:6px;display:${carIsOther?'block':'none'};">
+          </div>
+        </div>
+        <div class="field"><label>سبب التعديل (إلزامي)</label><textarea name="reason" rows="2" required placeholder="مثال: المندوب الأصلي مريض واتحول لمندوب آخر"></textarea></div>
+        <button class="bs bgo" type="submit" style="width:100%;">✔️ حفظ التعديل</button>
+      </form>
+    </div>`;
+  }
+  const q=(S.editOrderSearch||'').trim().toLowerCase();
+  let list=DB.orders.filter(o=>['pending_rep','with_rep','delivered'].includes(o.stage)&&(o.repName||'').trim());
+  if(q)list=list.filter(o=>[o.inv,o.cname,o.ccode,o.icode,o.iname,o.repName,o.carNo,o.batch].some(v=>(v||'').toString().toLowerCase().includes(q)));
+  list=list.slice().sort((a,b)=>(b.updAt||b.createdAt||0)-(a.updAt||a.createdAt||0)).slice(0,40);
+  return `<div class="field"><label>ابحث عن أوردر (رقم إذن / عميل / صنف / مندوب / سيارة)</label><input id="eos" value="${S.editOrderSearch||''}" placeholder="اكتب للبحث..."></div>
+  ${list.length===0?`<div class="empty">لا توجد أوردرات مطابقة (يشترط أن يكون الأوردر معيَّن له مندوب بالفعل)</div>`:list.map(o=>`
+    <div class="card" data-a="editpickorder" data-id="${o.id}" style="cursor:pointer;">
+      <div class="ch"><div><div class="ctitle">${o.cname||o.ccode||''}</div><div class="cmeta">${o.iname||o.icode||''} · SO: ${o.inv||'-'}</div></div><span class="tag tt">${stageLabel(o)}</span></div>
+      <div class="kv"><span>المندوب</span><b>${o.repName||'-'}</b></div>
+      <div class="kv"><span>السيارة</span><b>${o.carNo||'-'}</b></div>
+    </div>`).join('')}`;
+}
+function rEditRepView(){
+  const reps=repOptions().filter(r=>activeRepOrders(r).length>0);
+  const curRep=S.editRepSel||'';
+  const orders=curRep?activeRepOrders(curRep):[];
+  return `<div class="field"><label>المندوب الحالي (اللي هننقل شغله)</label>
+    <select id="erSrcSel">
+      <option value="">اختر المندوب...</option>
+      ${reps.map(r=>`<option value="${r}" ${r===curRep?'selected':''}>${r} (${activeRepOrders(r).length} أوردر)</option>`).join('')}
+    </select>
+  </div>
+  ${!curRep?`<div class="empty">اختر مندوب لعرض أوردراته الحالية ونقلها لمندوب آخر</div>`:`
+  <div class="slabel">أوردرات ${curRep} الحالية (${orders.length})</div>
+  <div style="max-height:180px;overflow-y:auto;border:1px solid var(--line);border-radius:9px;padding:8px;margin-bottom:10px;background:#fff;">
+    ${orders.map(o=>`<div class="kv"><span>${o.cname||o.ccode} — ${o.iname||o.icode}</span><b>${o.inv||o.id}</b></div>`).join('')}
+  </div>
+  <form id="editrepf" data-oldrep="${curRep}">
+    <div class="row2">
+      <div class="field"><label>المندوب الجديد</label>
+        <select name="rnSel" id="erRnSel" required>
+          <option value="">اختر المندوب...</option>
+          ${repOptions().filter(r=>r!==curRep).map(r=>`<option value="${r}">${r}</option>`).join('')}
+          <option value="__other__">➕ اسم آخر...</option>
+        </select>
+        <input name="rnOther" id="erRnOther" placeholder="اكتب اسم المندوب" style="margin-top:6px;display:none;">
+      </div>
+      <div class="field"><label>سيارة جديدة (اختياري)</label>
+        <select name="cnSel" id="erCnSel">
+          <option value="">بدون تغيير السيارة</option>
+          ${DB.cars.map(c=>`<option value="${c.carNo}">🚗 ${c.carNo}</option>`).join('')}
+          <option value="__other__">➕ رقم غير مسجّل...</option>
+        </select>
+        <input name="cnOther" id="erCnOther" placeholder="اكتب رقم العربية" style="margin-top:6px;display:none;">
+      </div>
+    </div>
+    <div class="field"><label>سبب النقل (إلزامي)</label><textarea name="reason" rows="2" required placeholder="مثال: المندوب الأصلي اعتذر عن الرحلة النهاردة"></textarea></div>
+    <button class="bs bgo" type="submit" style="width:100%;">✔️ نقل كل الأوردرات (${orders.length}) للمندوب الجديد</button>
+  </form>`}`;
+}
+function rEditBatchView(){
+  const groups=importBatchGroups();
+  const sel=S.editBatchKey?groups.find(g=>g.key===S.editBatchKey):null;
+  if(sel){
+    const repOpts=repOptions();
+    return `<div class="card">
+      <div class="ch"><div><div class="ctitle">📥 ${sel.fileName||'إذن مجمع'}</div><div class="cmeta">${sel.orders.length} صنف · المندوب الحالي: ${sel.repName||'-'} · السيارة: ${sel.carNo||'-'}</div></div>
+      <button class="bs bghost" type="button" data-a="editclearsel">✕ رجوع</button></div>
+      <form id="editbatchf" data-key="${sel.key}">
+        <div class="row2">
+          <div class="field"><label>المندوب الجديد</label>
+            <select name="rnSel" id="ebRnSel" required>
+              <option value="">اختر المندوب...</option>
+              ${repOpts.map(r=>`<option value="${r}">${r}</option>`).join('')}
+              <option value="__other__">➕ اسم آخر...</option>
+            </select>
+            <input name="rnOther" id="ebRnOther" placeholder="اكتب اسم المندوب" style="margin-top:6px;display:none;">
+          </div>
+          <div class="field"><label>سيارة جديدة (اختياري)</label>
+            <select name="cnSel" id="ebCnSel">
+              <option value="">بدون تغيير السيارة</option>
+              ${DB.cars.map(c=>`<option value="${c.carNo}">🚗 ${c.carNo}</option>`).join('')}
+              <option value="__other__">➕ رقم غير مسجّل...</option>
+            </select>
+            <input name="cnOther" id="ebCnOther" placeholder="اكتب رقم العربية" style="margin-top:6px;display:none;">
+          </div>
+        </div>
+        <div class="field"><label>سبب تعديل الإذن المجمع بالكامل (إلزامي)</label><textarea name="reason" rows="2" required placeholder="مثال: تغيير خط السير بالكامل لمندوب آخر"></textarea></div>
+        <button class="bs bgo" type="submit" style="width:100%;">✔️ نقل الإذن المجمع بالكامل (${sel.orders.length} صنف)</button>
+      </form>
+    </div>`;
+  }
+  return `<div class="slabel">الأذون المجمعة الحالية (مستوردة من إكسيل ولسه قيد التنفيذ)</div>
+  ${groups.length===0?`<div class="empty">لا توجد أذون مجمعة قيد التنفيذ حالياً</div>`:groups.map(g=>`
+    <div class="card" data-a="editpickbatch" data-key="${g.key}" style="cursor:pointer;">
+      <div class="ch"><div><div class="ctitle">📥 ${g.fileName||'إذن مجمع'}</div><div class="cmeta">${g.importedAt?new Date(g.importedAt).toLocaleString('ar-EG'):'-'}</div></div><span class="tag tt">${g.orders.length} صنف</span></div>
+      <div class="kv"><span>المندوب</span><b>${g.repName||'-'}</b></div>
+      <div class="kv"><span>السيارة</span><b>${g.carNo||'-'}</b></div>
+    </div>`).join('')}`;
+}
+function rEditLogView(){
+  const u=S.user;
+  let log=(DB.editLog||[]).slice().sort((a,b)=>(b.at||0)-(a.at||0));
+  if(u.role!=='admin')log=log.filter(x=>x.byUser===u.username);
+  return `${u.role==='admin'?`<button class="bs bghost" type="button" data-a="editmarkread" style="width:100%;margin-bottom:10px;">✔️ تعليم كل التعديلات كمقروءة</button>`:''}
+  <div class="slabel">سجل التعديلات (${log.length})</div>
+  ${log.length===0?`<div class="empty">لا توجد تعديلات مسجّلة</div>`:log.map(x=>`
+    <div class="card">
+      <div class="ch"><div class="ctitle" style="font-size:12.5px;">${x.label||''}</div><span class="tag ${x.type==='order'?'tt':x.type==='rep_move'?'tw':'ta'}">${x.type==='order'?'أوردر منفرد':x.type==='rep_move'?'نقل مندوب':'إذن مجمع'}</span></div>
+      ${(x.oldRep||x.newRep)?`<div class="kv"><span>المندوب</span><b>${x.oldRep||'-'} ← ${x.newRep||'-'}</b></div>`:''}
+      ${(x.oldCar||x.newCar)?`<div class="kv"><span>السيارة</span><b>${x.oldCar||'-'} ← ${x.newCar||'-'}</b></div>`:''}
+      <div class="kv"><span>السبب</span><b style="color:var(--warn);">${x.reason||'-'}</b></div>
+      <div class="kv"><span>بواسطة</span><b>${x.byName||x.byUser||'-'}</b></div>
+      <div class="kv"><span>التاريخ</span><b>${x.at?new Date(x.at).toLocaleString('ar-EG'):'-'}</b></div>
+    </div>`).join('')}`;
+}
+async function onEditOrderSubmit(e){
+  if(!['admin','cars'].includes(S.user.role))return;
+  const f=new FormData(e.target);
+  const id=e.target.dataset.id;
+  const o=DB.orders.find(x=>x.id===id);
+  if(!o){toast('⛔ الأوردر غير موجود');return;}
+  const rnSel=f.get('rnSel'),rnOther=(f.get('rnOther')||'').trim();
+  const cnSel=f.get('cnSel'),cnOther=(f.get('cnOther')||'').trim();
+  const newRep=rnSel==='__other__'?rnOther:(rnSel||'');
+  const newCar=cnSel==='__other__'?cnOther:(cnSel||'');
+  const reason=(f.get('reason')||'').trim();
+  if(!reason){toast('⛔ يجب كتابة سبب التعديل قبل الحفظ');return;}
+  if(!newRep&&!newCar){toast('⛔ لم يتم اختيار مندوب أو سيارة جديدة — لا يوجد ما يُحفظ');return;}
+  const oldRep=o.repName||'',oldCar=o.carNo||'';
+  if(newRep)o.repName=newRep;
+  if(newCar)o.carNo=newCar;
+  o.updAt=Date.now();
+  o.editHistory=(o.editHistory||[]).concat([{at:Date.now(),by:S.user.name,oldRep,newRep:o.repName,oldCar,newCar:o.carNo,reason}]);
+  const ok=await svo(o);
+  if(!ok){toast('⚠️ فشل حفظ التعديل — تحقق من الاتصال وحاول تاني');return;}
+  await logEditEntry({type:'order',orderIds:[o.id],label:(o.cname||o.ccode||'')+(o.inv?' — SO: '+o.inv:''),oldRep,newRep:o.repName,oldCar,newCar:o.carNo,reason});
+  toast('✅ تم حفظ التعديل وإرسال إشعار لمدير النظام');
+  S.editSelOid=null;render();
+}
+async function onEditRepSubmit(e){
+  if(!['admin','cars'].includes(S.user.role))return;
+  const f=new FormData(e.target);
+  const oldRep=e.target.dataset.oldrep;
+  const rnSel=f.get('rnSel'),rnOther=(f.get('rnOther')||'').trim();
+  const newRep=rnSel==='__other__'?rnOther:(rnSel||'');
+  const cnSel=f.get('cnSel'),cnOther=(f.get('cnOther')||'').trim();
+  const newCar=cnSel==='__other__'?cnOther:(cnSel||'');
+  const reason=(f.get('reason')||'').trim();
+  if(!newRep){toast('⛔ اختر المندوب الجديد');return;}
+  if(!reason){toast('⛔ يجب كتابة سبب النقل قبل الحفظ');return;}
+  const orders=activeRepOrders(oldRep);
+  if(!orders.length){toast('⚠️ لا توجد أوردرات حالية لهذا المندوب');return;}
+  orders.forEach(o=>{
+    const oOldRep=o.repName||'',oOldCar=o.carNo||'';
+    o.repName=newRep;
+    if(newCar)o.carNo=newCar;
+    o.updAt=Date.now();
+    o.editHistory=(o.editHistory||[]).concat([{at:Date.now(),by:S.user.name,oldRep:oOldRep,newRep,oldCar:oOldCar,newCar:o.carNo,reason}]);
+  });
+  const ok=await svo(orders);
+  if(!ok){toast('⚠️ فشل حفظ النقل — تحقق من الاتصال وحاول تاني');return;}
+  await logEditEntry({type:'rep_move',orderIds:orders.map(o=>o.id),label:'نقل '+orders.length+' أوردر من '+oldRep+' إلى '+newRep,oldRep,newRep,oldCar:'',newCar,reason});
+  toast(`✅ تم نقل ${orders.length} أوردر إلى ${newRep} وإرسال إشعار لمدير النظام`);
+  S.editRepSel=null;render();
+}
+async function onEditBatchSubmit(e){
+  if(!['admin','cars'].includes(S.user.role))return;
+  const f=new FormData(e.target);
+  const key=e.target.dataset.key;
+  const group=importBatchGroups().find(g=>g.key===key);
+  if(!group){toast('⛔ الإذن المجمع غير موجود أو تم تنفيذه بالفعل');return;}
+  const rnSel=f.get('rnSel'),rnOther=(f.get('rnOther')||'').trim();
+  const newRep=rnSel==='__other__'?rnOther:(rnSel||'');
+  const cnSel=f.get('cnSel'),cnOther=(f.get('cnOther')||'').trim();
+  const newCar=cnSel==='__other__'?cnOther:(cnSel||'');
+  const reason=(f.get('reason')||'').trim();
+  if(!newRep){toast('⛔ اختر المندوب الجديد');return;}
+  if(!reason){toast('⛔ يجب كتابة سبب تعديل الإذن المجمع قبل الحفظ');return;}
+  const oldRep=group.repName||'',oldCarG=group.carNo||'';
+  group.orders.forEach(o=>{
+    o.repName=newRep;
+    if(newCar)o.carNo=newCar;
+    o.updAt=Date.now();
+    o.editHistory=(o.editHistory||[]).concat([{at:Date.now(),by:S.user.name,oldRep,newRep,oldCar:oldCarG,newCar:o.carNo,reason}]);
+  });
+  const ok=await svo(group.orders);
+  if(!ok){toast('⚠️ فشل حفظ تعديل الإذن المجمع — تحقق من الاتصال وحاول تاني');return;}
+  await logEditEntry({type:'batch',orderIds:group.orders.map(o=>o.id),label:'إذن مجمع ('+(group.fileName||'-')+') — '+group.orders.length+' صنف',oldRep,newRep,oldCar:oldCarG,newCar,reason});
+  toast(`✅ تم نقل الإذن المجمع بالكامل (${group.orders.length} صنف) إلى ${newRep} وإرسال إشعار لمدير النظام`);
+  S.editBatchKey=null;render();
+}
+
 /* ===== BIND ===== */
 function sameDay(ts,d){const a=new Date(ts||0);return a.getFullYear()===d.getFullYear()&&a.getMonth()===d.getMonth()&&a.getDate()===d.getDate();}
 
@@ -3851,10 +4155,20 @@ function bind(){
     });
   };
   f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);f('acarf',onACar);f('euf',onEU);
+  f('editorderf',onEditOrderSubmit);f('editrepf',onEditRepSubmit);f('editbatchf',onEditBatchSubmit);
   const rnSelEl=document.getElementById('rnSel');
   if(rnSelEl)rnSelEl.addEventListener('change',()=>{const ot=document.getElementById('rnOther');if(ot)ot.style.display=rnSelEl.value==='__other__'?'block':'none';});
   const cnSelEl=document.getElementById('cnSel');
   if(cnSelEl)cnSelEl.addEventListener('change',()=>{const ot=document.getElementById('cnOther');if(ot)ot.style.display=cnSelEl.value==='__other__'?'block':'none';});
+  // إظهار/إخفاء حقل "اسم/رقم آخر" لكل نموذج من نماذج شاشة التعديلات (أوردر منفرد / نقل مندوب / إذن مجمع)
+  [['eoRnSel','eoRnOther'],['eoCnSel','eoCnOther'],['erRnSel','erRnOther'],['erCnSel','erCnOther'],['ebRnSel','ebRnOther'],['ebCnSel','ebCnOther']].forEach(([selId,othId])=>{
+    const selEl=document.getElementById(selId);
+    if(selEl)selEl.addEventListener('change',()=>{const ot=document.getElementById(othId);if(ot)ot.style.display=selEl.value==='__other__'?'block':'none';});
+  });
+  const erSrcSelEl=document.getElementById('erSrcSel');
+  if(erSrcSelEl)erSrcSelEl.addEventListener('change',()=>{S.editRepSel=erSrcSelEl.value;render();});
+  const eosEl=document.getElementById('eos');
+  if(eosEl)eosEl.addEventListener('input',()=>{S.editOrderSearch=eosEl.value;debouncedRender(()=>{render();const e2=document.getElementById('eos');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});});
   const n2cntEl=document.getElementById('n2cnt');if(n2cntEl)n2cntEl.addEventListener('change',()=>updateN2LabOptions(n2cntEl.value));
   f('crf',onCounterReturn);
   const crlabEl=document.getElementById('crlab');if(crlabEl)crlabEl.addEventListener('change',()=>updateCRCounterOptions(crlabEl.value));
@@ -4102,7 +4416,7 @@ function onA(e){
 function onAInner(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -4203,6 +4517,12 @@ function onAInner(e){
   else if(a==='notifperm'){requestNotifPermission();}
   else if(a==='notifclose'){S.notifOpen=false;render();}
   else if(a==='notifitem'){S.notifOpen=false;S.tab='order';S.oid=id;render();}
+  else if(a==='notifeditopen'){S.notifOpen=false;localStorage.setItem('ift_editlog_seen_at',String(Date.now()));if(id){S.tab='order';S.oid=id;}else{S.tab='edits';S.editView='log';}render();}
+  else if(a==='editmarkread'){localStorage.setItem('ift_editlog_seen_at',String(Date.now()));render();}
+  else if(a==='editview'){S.editView=el.dataset.v;S.editSelOid=null;S.editBatchKey=null;render();}
+  else if(a==='editpickorder'){S.editSelOid=id;render();}
+  else if(a==='editpickbatch'){S.editBatchKey=el.dataset.key;render();}
+  else if(a==='editclearsel'){S.editSelOid=null;S.editBatchKey=null;S.editRepSel=null;render();}
 }
 
 async function requestNotifPermission(){
