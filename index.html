@@ -698,6 +698,92 @@ function optimizeRoute(stops){
   return{ordered:[...ordered,...unlocated],totalKm:totalM/1000,unlocated};
 }
 
+/* ===== Smart Order Consolidation — تجميع وتوزيع ذكي للأوردرات على المندوبين/السيارات اللي بيحددهم المكتب ===== */
+// الأوردرات المرشّحة للتوزيع: اللي وصلت لمرحلة "بانتظار السيارات" (نفس المرحلة اللي فيها بيتحدد المندوب/السيارة عادةً)
+function pendingConsolidationOrders(){
+  return DB.orders.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars');
+}
+// تجميع الأوردرات في "محطات" — محطة واحدة لكل عميل (لأن كل أوردراته غالبًا بتتسلّم في نفس المكان)
+function buildConsolidationStops(orders){
+  const map=new Map();
+  orders.forEach(o=>{
+    const cc=o.ccode||('_'+o.id);
+    if(!map.has(cc)){
+      const bl=bestCustLoc(o.ccode);
+      map.set(cc,{ccode:o.ccode,cname:o.cname||o.ccode,loc:bl?bl.loc:null,region:bl?bl.region:null,placeLabel:bl?bl.placeLabel:'',orders:[],qty:0});
+    }
+    const st=map.get(cc);
+    st.orders.push(o);
+    st.qty+=(+o.qty||0);
+  });
+  return[...map.values()];
+}
+// جوهر التوزيع الذكي: بيرتّب كل المحطات اللي ليها موقع محفوظ في مسار واحد "أقرب فالأقرب" (نفس منطق optimizeRoute)،
+// وبعدين بيقسّم المسار ده لعدد شرائح = عدد المندوبين اللي حددهم المكتب، بحيث كل شريحة تاخد نصيب متقارب من إجمالي الكيلومترات
+// (مش بالتساوي في عدد الأوردرات فقط) — وده بيضمن كمان إن كل مندوب ياخد أوردرات قريبة من بعضها جغرافيًا.
+// المحطات اللي بدون موقع محفوظ بتتوزّع بالتناوب (Round-robin) على كل المندوبين عشان العدد والكمية يفضلوا متقاربين قدر الإمكان.
+function runSmartConsolidation(units){
+  const N=units.length;
+  if(!N)return[];
+  const orders=pendingConsolidationOrders();
+  const stops=buildConsolidationStops(orders);
+  const located=stops.filter(s=>s.loc);
+  const unlocated=stops.filter(s=>!s.loc);
+  const master=optimizeRoute(located).ordered.filter(s=>s.loc); // مسار مُرتَّب جغرافيًا لكل المحطات المحدَّد موقعها
+  const gapKm=[0];
+  for(let i=1;i<master.length;i++)gapKm.push(haversineM(master[i-1].loc,master[i].loc)/1000);
+  const totalKm=gapKm.reduce((a,b)=>a+b,0);
+  const targetPerUnit=totalKm/N;
+  const buckets=Array.from({length:N},()=>[]);
+  let bIdx=0,acc=0;
+  master.forEach((s,i)=>{
+    if(i>0){
+      acc+=gapKm[i];
+      if(bIdx<N-1&&acc>=targetPerUnit*(bIdx+1)&&buckets[bIdx].length>0)bIdx++;
+    }
+    buckets[bIdx].push(s);
+  });
+  unlocated.forEach((s,i)=>buckets[i%N].push(s));
+  return units.map((u,i)=>{
+    const r=optimizeRoute(buckets[i]||[]);
+    return{
+      repName:u.repName,carNo:u.carNo,
+      stops:r.ordered,
+      totalKm:r.totalKm,
+      orderCount:r.ordered.reduce((n,s)=>n+s.orders.length,0),
+      totalQty:r.ordered.reduce((n,s)=>n+s.qty,0)
+    };
+  });
+}
+// نقل أوردر واحد يدويًا من مندوب لآخر داخل خطة التوزيع (قبل الاعتماد) — وإعادة حساب الكيلومترات/العدد/الكمية لكل من الوحدتين فورًا
+function moveOrderInPlan(orderId,fromIdx,toIdx){
+  if(!S.consPlan||fromIdx===toIdx)return;
+  const units=S.consPlan.units;
+  const fromU=units[fromIdx],toU=units[toIdx];
+  if(!fromU||!toU)return;
+  let order=null,fromStopIdx=-1;
+  for(let i=0;i<fromU.stops.length;i++){
+    const idx=fromU.stops[i].orders.findIndex(o=>o.id===orderId);
+    if(idx>-1){order=fromU.stops[i].orders.splice(idx,1)[0];fromU.stops[i].qty-=(+order.qty||0);fromStopIdx=i;break;}
+  }
+  if(!order)return;
+  if(fromU.stops[fromStopIdx].orders.length===0)fromU.stops.splice(fromStopIdx,1);
+  let toStop=toU.stops.find(s=>s.ccode===order.ccode);
+  if(!toStop){
+    const bl=bestCustLoc(order.ccode);
+    toStop={ccode:order.ccode,cname:order.cname||order.ccode,loc:bl?bl.loc:null,region:bl?bl.region:null,placeLabel:bl?bl.placeLabel:'',orders:[],qty:0};
+    toU.stops.push(toStop);
+  }
+  toStop.orders.push(order);
+  toStop.qty+=(+order.qty||0);
+  [fromU,toU].forEach(u=>{
+    const r=optimizeRoute(u.stops);
+    u.stops=r.ordered;u.totalKm=r.totalKm;
+    u.orderCount=u.stops.reduce((n,s)=>n+s.orders.length,0);
+    u.totalQty=u.stops.reduce((n,s)=>n+s.qty,0);
+  });
+}
+
 let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[],custLocations:{},editLog:[]};
 
 /* ============================================================
@@ -1018,6 +1104,95 @@ async function svst(){await dbSet('ift_settings',DB.settings);}
 async function svcar(){await dbSet('ift_cars',DB.cars);}
 async function svcloc(){await dbSet('ift_custLocations',DB.custLocations);}
 async function svel(){await dbSet('ift_editlog',DB.editLog);}
+
+/* ===== نسخ احتياطي واسترداد فوري لكل بيانات النظام ===== */
+// كل الجداول (غير الأوردرات، اللي بتتخزن بطريقة مختلفة — عقدة مفتاحها id كل أوردر) مع مفتاحها في قاعدة البيانات
+const BACKUP_TABLES=[
+  ['users','ift_users'],['customers','ift_customers'],['items','ift_items'],['balances','ift_balances'],
+  ['sectors','ift_sectors'],['labs','ift_labs'],['counters','ift_counters'],['labBalances','ift_labBalances'],
+  ['counterBalances','ift_counterBalances'],['counterLog','ift_counterLog'],['nitrogenBalances','ift_nitrogenBalances'],
+  ['counterLabMeta','ift_counterLabMeta'],['settings','ift_settings'],['cars','ift_cars'],
+  ['custLocations','ift_custLocations'],['editLog','ift_editlog'],
+];
+function buildBackupObject(){
+  const obj={_meta:{app:'IFT Veterinary',type:'ift-full-backup',version:1,exportedAt:Date.now(),exportedAtLabel:new Date().toLocaleString('ar-EG'),exportedBy:S.user?S.user.name:'',exportedByUsername:S.user?S.user.username:'',ordersCount:(DB.orders||[]).length,usersCount:(DB.users||[]).length}};
+  BACKUP_TABLES.forEach(([prop])=>{obj[prop]=DB[prop];});
+  obj.orders=DB.orders||[];
+  return obj;
+}
+// إنشاء وتنزيل نسخة احتياطية كاملة — بيحاول أول حاجة يسأل المستخدم "يحفظ فين" (لو المتصفح بيدعم ده)، ولو مش مدعوم بينزّل الملف عادي لمجلد التنزيلات
+async function doBackup(){
+  if(!S.user||S.user.role!=='admin')return;
+  try{
+    const backup=buildBackupObject();
+    const json=JSON.stringify(backup,null,2);
+    const pad=n=>String(n).padStart(2,'0');
+    const d=new Date();
+    const fname=`ift-backup-${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+    if(window.showSaveFilePicker){
+      try{
+        const handle=await window.showSaveFilePicker({suggestedName:fname,types:[{description:'ملف نسخة احتياطية JSON',accept:{'application/json':['.json']}}]});
+        const writable=await handle.createWritable();
+        await writable.write(json);
+        await writable.close();
+        toast('✅ تم حفظ النسخة الاحتياطية في المكان اللي اخترته');
+        return;
+      }catch(err){
+        if(err&&err.name==='AbortError')return; // المستخدم لغى اختيار مكان الحفظ
+        console.error('showSaveFilePicker error',err); // نكمل بالطريقة العادية تحت لو فشلت
+      }
+    }
+    const blob=new Blob([json],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;a.download=fname;document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),4000);
+    toast('✅ تم تنزيل النسخة الاحتياطية — هتلاقيها في مجلد التنزيلات بالجهاز');
+  }catch(err){
+    console.error('backup error',err);
+    toast('⛔ حصل خطأ أثناء إنشاء النسخة الاحتياطية — حاول تاني');
+  }
+}
+// حفظ كل الجداول (بعد الاسترداد) لقاعدة البيانات مرة واحدة على التوازي
+async function saveAllBackupTables(){
+  const keyedOrders={};
+  (DB.orders||[]).forEach(o=>{if(o&&o.id)keyedOrders[o.id]=o;});
+  await Promise.all([
+    ...BACKUP_TABLES.map(([prop,fbKey])=>dbSet(fbKey,DB[prop])),
+    dbSet('ift_orders',keyedOrders),
+  ]);
+}
+// قراءة ملف النسخة الاحتياطية اللي المدير اختاره والتأكد إنه صالح قبل ما نعرض شاشة التأكيد
+async function onRestoreFile(e){
+  const file=e.target.files[0];if(!file)return;
+  e.target.value=''; // نسيب المدير يقدر يختار نفس الملف تاني لو احتاج
+  try{
+    const text=await file.text();
+    const parsed=JSON.parse(text);
+    if(!parsed||!parsed._meta||parsed._meta.type!=='ift-full-backup'){toast('⛔ الملف المختار مش نسخة احتياطية صالحة لهذا النظام');return;}
+    S.restorePending=parsed;
+    toast('📂 تم تحميل النسخة — راجع تفاصيلها وأكّد الاسترداد');
+    render();
+  }catch(err){
+    console.error('restore file parse error',err);
+    toast('⛔ تعذّر قراءة الملف — تأكد إنه ملف نسخة احتياطية JSON صحيح وغير تالف');
+  }
+}
+// تنفيذ الاسترداد الفعلي بعد تأكيد المدير — استبدال كل بيانات النظام بمحتوى النسخة المرفوعة وحفظها فورًا
+async function doRestoreConfirm(){
+  if(!S.user||S.user.role!=='admin'||!S.restorePending)return;
+  const inp=document.getElementById('restoreConfirmText');
+  const val=inp?inp.value.trim():'';
+  if(val!=='استرداد'){toast('⛔ اكتب كلمة "استرداد" بالظبط في المربع للتأكيد قبل التنفيذ');return;}
+  const backup=S.restorePending;
+  BACKUP_TABLES.forEach(([prop])=>{if(backup[prop]!==undefined)DB[prop]=backup[prop];});
+  if(Array.isArray(backup.orders))DB.orders=backup.orders;
+  toast('⏳ جارِ استرداد كل البيانات فورًا...');render();
+  await saveAllBackupTables();
+  try{await logEditEntry({type:'restore',orderIds:[],label:'استرداد كامل من نسخة احتياطية بتاريخ '+((backup._meta&&backup._meta.exportedAtLabel)||'-'),reason:'تنفيذ استرداد فوري لكل بيانات النظام من نسخة احتياطية — بمعرفة '+S.user.name});}catch(_){}
+  toast('✅ تم استرداد كل البيانات بنجاح');
+  S.restorePending=null;S.tab='dash';render();
+}
 let BAL_VERSION=0; // يترفع كل مرة تتغيّر فيها أرصدة الأمانة — بيُستخدم لتفريغ الكاش بدل إعادة حساب كل حاجة من الصفر كل مرة
 
 // ===== ترحيل تخزين الأوردرات من "مصفوفة واحدة" إلى "عنصر مستقل لكل أوردر بمفتاحه الثابت id" (مرة واحدة فقط) =====
@@ -1316,7 +1491,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:''};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:'',consUnits:[],consPlan:null,restorePending:null};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -1349,7 +1524,7 @@ let pendDlvAtt=null; // صورة/ملف إثبات التسليم اللي ال�
 
 // ===== استيراد ملف اكسيل خارجي (الأذن المجمع للمندوب) — طريقة صرف رابعة =====
 const XLS_IMPORT_FIELDS=[
-  {key:'rep',label:'اسم المندوب',required:true,aliases:['المندوب','مندوب','اسم المندوب','السائق','مندوب التوزيع']},
+  {key:'rep',label:'اسم المندوب',required:false,aliases:['المندوب','مندوب','اسم المندوب','السائق','مندوب التوزيع']},
   {key:'carNo',label:'رقم السيارة',required:false,aliases:['رقم السيارة','السيارة','رقم العربية','عربية']},
   {key:'route',label:'خط السير',required:false,aliases:['خط السير','خط سير','الخط']},
   {key:'outDate',label:'تاريخ الخروج',required:false,aliases:['الخروج','تاريخ الخروج']},
@@ -1625,7 +1800,7 @@ async function xlsConfirmImport(){
   xlsImp.importing=true;xlsImp.importError=null;render();
   await new Promise(r=>setTimeout(r,20)); // نسيب المتصفح يرسم شاشة "جارِ الاستيراد" قبل ما نبدأ الشغل
   try{
-  let added=0,dup=0,invalid=0;
+  let added=0,dup=0,invalid=0,needsAssign=0;
   const newOrders=[];
   // أي قطاعات مكتوبة في الشيت ومش موجودة بالنظام، نضيفها تلقائيًا الأول عشان معلومة القطاع متتفقدش
   const newSectorNames=[...new Set(xlsImp.parsedRows.map(r=>(r.sector||'').trim()).filter(Boolean))]
@@ -1643,10 +1818,14 @@ async function xlsConfirmImport(){
     const sectorRec=DB.sectors.find(s=>xh(s.name)===xh(row.sector));
     // نحاول نربط "المعمل/مكان التسليم" المكتوب في الشيت بمعمل مسجَّل فعليًا تابع لنفس العميل (لو الاسم متطابق أو قريب)
     const labMatch=row.labName?labsForCustomer(row.ccode).find(l=>xh(l.name)===xh(row.labName)||xh(l.name).includes(xh(row.labName))||xh(row.labName).includes(xh(l.name))):null;
+    // لو الشيت مديله مندوب وسيارة فعلاً → الصنف يُعتبر مُسلَّم بالفعل (with_rep) زي ما كان.
+    // لو ناقص أي منهم (أو الاتنين) → لازم يمر بمسار "بانتظار السيارات" عشان ياخد التوزيع الذكي أو تعيين يدوي بدل ما يتفوّت عليه
+    const resolvedRepName=repUser?repUser.name:(row.rep||'');
+    const readyForRep=!!(resolvedRepName&&row.carNo);
     const o={
-      id:uid('o'),kind:'withdrawal',orderType:'excel',stage:'with_rep',
+      id:uid('o'),kind:'withdrawal',orderType:'excel',stage:readyForRep?'with_rep':'pending_cars',
       cby:u.username,cbyn:u.name,createdAt:Date.now(),updAt:Date.now(),
-      repReceivedAt:Date.now(),repReceivedBy:repUser?repUser.name:row.rep,
+      ...(readyForRep?{repReceivedAt:Date.now(),repReceivedBy:resolvedRepName}:{}),
       schedDate:row.outDate||ymd(Date.now()),
       inv:row.soNo||'',
       ccode:row.ccode,cname:(custRec&&custRec.name)||row.cname||'',
@@ -1656,13 +1835,14 @@ async function xlsConfirmImport(){
       note:row.note||'',
       sector:sectorRec?sectorRec.code:'',sectorName:sectorRec?sectorRec.name:(row.sector||''),
       priceCat:row.priceCat||'',
-      repName:repUser?repUser.name:row.rep,carNo:row.carNo||'',route:row.route||'',
+      repName:resolvedRepName,carNo:row.carNo||'',route:row.route||'',
       outDate:row.outDate||'',invDate:row.invDate||'',retDate:row.retDate||'',
       whName:row.whName||'',
       labCode:labMatch?labMatch.code:'',labName:labMatch?labMatch.name:(row.labName||''),
       xlsImportKey:key,xlsImportedAt:Date.now(),xlsImportedBy:u.username,xlsFileName:xlsImp.fileName
     };
     DB.orders.push(o);newOrders.push(o);added++;
+    if(!readyForRep)needsAssign++;
   });
   let saveOk=true;
   if(added>0)saveOk=await svo(newOrders);
@@ -1672,7 +1852,7 @@ async function xlsConfirmImport(){
     render();
     return;
   }
-  toast(`✅ تم استيراد ${added} صنف إلى الأذن المجمع`+(dup?` — تخطي ${dup} مكرر`:'')+(invalid?` — تجاهل ${invalid} صف غير مكتمل`:''));
+  toast(`✅ تم استيراد ${added} صنف إلى الأذن المجمع`+(needsAssign?` — ${needsAssign} منهم بانتظار تحديد المندوب/السيارة (استخدم 🧠 التوزيع الذكي)`:'')+(dup?` — تخطي ${dup} مكرر`:'')+(invalid?` — تجاهل ${invalid} صف غير مكتمل`:''));
   xlsImp=null;S.pageShow.xlsPreview=undefined;S.tab='home';S.oid=null;render();
   }catch(err){
     console.error('xlsConfirmImport error',err);
@@ -1791,7 +1971,9 @@ function rXlsImport(){
     const repNames=[...new Set(rows.map(r=>r.rep).filter(Boolean))];
     const repUsers=DB.users.filter(u=>u.role==='rep');
     const pg=pageSlice(rows,'xlsPreview',50);
+    const noRepCarCount=rows.filter(r=>!(r.rep&&r.carNo)).length;
     return `
+    ${noRepCarCount?`<div class="balbox" style="background:var(--blue-lg);border:1px solid var(--blue2);color:var(--blue2);font-size:11.5px;margin-bottom:10px;">ℹ️ ${noRepCarCount} صف من غير مندوب و/أو سيارة محدَّد بالكامل في الملف — هيتسجّلوا وهيروحوا لشاشة "🧠 التوزيع الذكي" بعد الاستيراد عشان تحدد لهم مندوب وسيارة (يدويًا أو بالتوزيع الذكي).</div>`:''}
     <div class="slabel">🧍 مطابقة أسماء المناديب بحسابات مسجّلة</div>
     ${repNames.map(rn=>`
       <div class="field">
@@ -2059,6 +2241,7 @@ function getTabs(){
   if(['admin','data_entry','accounts'].includes(r))all.push({k:'bal',ic:'💳',t:'الأرصدة'});
   all.push({k:'rep',ic:'📊',t:'التقارير'});
   if(['admin','cars'].includes(r))all.push({k:'edits',ic:'✏️',t:'تعديلات'});
+  if(['admin','cars'].includes(r))all.push({k:'consolidate',ic:'🧠',t:'توزيع ذكي'});
   if(r==='admin')all.push({k:'adm',ic:'⚙️',t:'الإدارة'});
   return all;
 }
@@ -2077,6 +2260,7 @@ function rShell(){
   else if(S.tab==='cntlog')body=rCntLog();
   else if(S.tab==='labcnt')body=rLabCounters();
   else if(S.tab==='edits')body=rEdits();
+  else if(S.tab==='consolidate')body=rConsolidate();
   return `
   <div class="topbar">
     <div class="brand"><img class="tlogo" src="${LOGO}" alt="IFT">${u.photo?`<img src="${u.photo}" style="width:30px;height:30px;border-radius:50%;object-fit:cover;border:1.5px solid rgba(255,255,255,.4);">`:''}<div><div class="tname">${u.name}</div><div class="trole">${RLBL[u.role]}</div></div></div>
@@ -2359,6 +2543,34 @@ function timeAgoStr(ts){
   if(hrs<24)return `منذ ${hrs} ساعة`;
   return `منذ ${Math.floor(hrs/24)} يوم`;
 }
+// كارت النسخ الاحتياطي والاسترداد الفوري — بيظهر أعلى لوحة معلومات المدير مباشرة
+function rBackupCard(){
+  if(S.restorePending){
+    const b=S.restorePending,meta=b._meta||{};
+    return `<div class="card" style="border:2px solid var(--bad);background:var(--bad-bg);margin-bottom:12px;">
+      <div class="ctitle" style="color:var(--bad);margin-bottom:6px;">⚠️ تأكيد الاسترداد من نسخة احتياطية</div>
+      <div class="kv"><span>تاريخ إنشاء النسخة</span><b>${meta.exportedAtLabel||'-'}</b></div>
+      <div class="kv"><span>بواسطة</span><b>${meta.exportedBy||'-'}</b></div>
+      <div class="kv"><span>عدد الأذونات بالنسخة</span><b>${(b.orders||[]).length}</b></div>
+      <div class="kv"><span>عدد المستخدمين بالنسخة</span><b>${(b.users||[]).length}</b></div>
+      <div style="font-size:12px;color:var(--bad);font-weight:700;margin:10px 0;line-height:1.7;">هذا الإجراء هيستبدل كل بيانات النظام الحالية (كل الأذونات والأرصدة والعملاء والمستخدمين...) بالكامل بمحتوى هذه النسخة فورًا، ولا يمكن التراجع عنه. اكتب كلمة "استرداد" بالظبط في المربع تحت للتأكيد:</div>
+      <div class="field"><input id="restoreConfirmText" placeholder="اكتب: استرداد" autocomplete="off"></div>
+      <div class="brow" style="gap:8px;">
+        <button class="bs bghost" type="button" data-a="restorecancel" style="width:50%;">✕ إلغاء</button>
+        <button class="bs" type="button" data-a="restoreconfirm" style="width:50%;background:var(--bad);color:#fff;">⚠️ تنفيذ الاسترداد الآن</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="card" style="margin-bottom:12px;">
+    <div class="ctitle" style="margin-bottom:6px;">💾 نسخ احتياطي واسترداد فوري</div>
+    <div style="font-size:11.5px;color:var(--muted);margin-bottom:10px;line-height:1.6;">اعمل نسخة احتياطية من كل بيانات النظام واحفظها فين ما تحب، ولو حصل أي مشكلة ارجع لهنا وارفعها لاسترداد كل حاجة فورًا.</div>
+    <div class="brow" style="gap:8px;">
+      <button class="bs bgo" type="button" data-a="backupnow" style="width:50%;">📥 نسخة احتياطية الآن</button>
+      <label class="bs bghost" for="restoreFileInput" style="width:50%;text-align:center;cursor:pointer;display:flex;align-items:center;justify-content:center;">♻️ استرداد من نسخة</label>
+      <input type="file" id="restoreFileInput" accept="application/json,.json" style="display:none;">
+    </div>
+  </div>`;
+}
 function rDash(){
   const u=S.user;
   const grt=greetingMsg();
@@ -2395,6 +2607,7 @@ function rDash(){
   <div class="ssub">${now.toLocaleDateString('ar-EG',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
   <div class="content">
     <div class="greetbar"><span>${grt.txt} — إليك نظرة عامة على نشاط الشركة <span style="font-size:15px;">${grt.ic}</span></span></div>
+    ${rBackupCard()}
 
     <div class="grid2" style="margin-bottom:12px;">
       <div class="rbox" style="text-align:center;"><div style="font-size:20px;">👥</div><div class="big">${custCount}</div><div class="lab">إجمالي العملاء</div></div>
@@ -3531,8 +3744,8 @@ function rOrd(){
   flds+=`<div class="kv"><span>أنشئ بواسطة</span><b>${o.cbyn||o.cby||'-'}</b></div>`;
   if(o.updAt)flds+=`<div class="kv"><span>آخر تحديث</span><b>${new Date(o.updAt).toLocaleString('ar-EG')}</b></div>`;
   let att='';
-  if(o.att){const isImg=o.att.type?.startsWith('image');att=`<div class="slabel">المرفق</div>${isImg?`<img src="${o.att.data}" style="width:100%;border-radius:10px;margin-bottom:8px;" alt="مرفق">`:`<div class="attachprev">📄 ${o.att.name||'مستند مرفق'}</div>`}`;}
-  if(o.dlvAtt){const isImg=o.dlvAtt.type?.startsWith('image');att+=`<div class="slabel">🧾 إثبات التسليم</div>${isImg?`<img src="${o.dlvAtt.data}" style="width:100%;border-radius:10px;margin-bottom:8px;" alt="إثبات التسليم">`:`<div class="attachprev">📄 ${o.dlvAtt.name||'ملف إثبات التسليم'}</div>`}`;}
+  if(o.att){const isImg=o.att.type?.startsWith('image');att=`<div class="slabel">المرفق</div>${isImg?`<a href="${o.att.data}" target="_blank" rel="noopener" download="${o.att.name||'attachment'}"><img src="${o.att.data}" style="width:100%;border-radius:10px;margin-bottom:8px;cursor:pointer;" alt="مرفق"></a>`:`<a href="${o.att.data}" target="_blank" rel="noopener" download="${o.att.name||'مستند مرفق'}" class="attachprev" style="display:flex;align-items:center;gap:8px;text-decoration:none;">📄 ${o.att.name||'مستند مرفق'}<span style="margin-right:auto;color:var(--blue2);font-weight:800;">فتح ⬇️</span></a>`}`;}
+  if(o.dlvAtt){const isImg=o.dlvAtt.type?.startsWith('image');att+=`<div class="slabel">🧾 إثبات التسليم</div>${isImg?`<a href="${o.dlvAtt.data}" target="_blank" rel="noopener" download="${o.dlvAtt.name||'delivery-proof'}"><img src="${o.dlvAtt.data}" style="width:100%;border-radius:10px;margin-bottom:8px;cursor:pointer;" alt="إثبات التسليم"></a>`:`<a href="${o.dlvAtt.data}" target="_blank" rel="noopener" download="${o.dlvAtt.name||'ملف إثبات التسليم'}" class="attachprev" style="display:flex;align-items:center;gap:8px;text-decoration:none;">📄 ${o.dlvAtt.name||'ملف إثبات التسليم'}<span style="margin-right:auto;color:var(--blue2);font-weight:800;">فتح ⬇️</span></a>`}`;}
   // ===== أزرار الإجراءات =====
   let acts = '';
   // زرار الإلغاء للأدمن دائماً في الأعلى
@@ -4048,7 +4261,7 @@ function rEditLogView(){
   <div class="slabel">سجل التعديلات (${log.length})</div>
   ${log.length===0?`<div class="empty">لا توجد تعديلات مسجّلة</div>`:log.map(x=>`
     <div class="card">
-      <div class="ch"><div class="ctitle" style="font-size:12.5px;">${x.label||''}</div><span class="tag ${x.type==='order'?'tt':x.type==='rep_move'?'tw':'ta'}">${x.type==='order'?'أوردر منفرد':x.type==='rep_move'?'نقل مندوب':'إذن مجمع'}</span></div>
+      <div class="ch"><div class="ctitle" style="font-size:12.5px;">${x.label||''}</div><span class="tag ${x.type==='order'?'tt':x.type==='rep_move'?'tw':x.type==='restore'?'tw':'ta'}">${x.type==='order'?'أوردر منفرد':x.type==='rep_move'?'نقل مندوب':x.type==='smart_consolidation'?'توزيع ذكي':x.type==='restore'?'استرداد نسخة احتياطية':'إذن مجمع'}</span></div>
       ${(x.oldRep||x.newRep)?`<div class="kv"><span>المندوب</span><b>${x.oldRep||'-'} ← ${x.newRep||'-'}</b></div>`:''}
       ${(x.oldCar||x.newCar)?`<div class="kv"><span>السيارة</span><b>${x.oldCar||'-'} ← ${x.newCar||'-'}</b></div>`:''}
       <div class="kv"><span>السبب</span><b style="color:var(--warn);">${x.reason||'-'}</b></div>
@@ -4133,6 +4346,120 @@ async function onEditBatchSubmit(e){
   S.editBatchKey=null;render();
 }
 
+/* ===== شاشة التوزيع الذكي (Smart Order Consolidation) ===== */
+function rConsolidate(){
+  if(S.consPlan)return rConsPlanView();
+  const pending=pendingConsolidationOrders();
+  const units=S.consUnits||[];
+  const repUsersList=DB.users.filter(x=>x.role==='rep'&&x.active!==false);
+  return `<div class="stitle">🧠 التوزيع الذكي للأوردرات</div>
+  <div class="ssub">النظام يجمّع الأوردرات حسب قرب مواقع التسليم ويوزّعها بالتوازن حسب إجمالي الكيلومترات — أنت تحدد المندوبين والسيارات فقط</div>
+  <div class="content">
+    <div class="card">
+      <div class="ctitle" style="margin-bottom:4px;">📦 الأوردرات الجاهزة للتوزيع</div>
+      <div class="kv"><span>بانتظار تحديد المندوب/السيارة حاليًا</span><b>${pending.length}</b></div>
+    </div>
+    <div class="slabel">حدّد المندوبين والسيارات المشاركين في هذه الجولة</div>
+    ${units.length===0?`<div class="empty" style="padding:24px 10px;">أضف مندوبًا وسيارة على الأقل للبدء</div>`:''}
+    ${units.map((un,i)=>`
+      <div class="row2" style="margin-bottom:8px;align-items:end;">
+        <div class="field"><label>المندوب ${i+1}</label>
+          <select class="consUnitRepSel" data-idx="${i}">
+            <option value="">اختر المندوب...</option>
+            ${repUsersList.map(r=>`<option value="${r.name}" ${r.name===un.repName?'selected':''}>${r.name}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;gap:6px;align-items:end;">
+          <div class="field" style="flex:1;margin-bottom:0;"><label>السيارة</label>
+            <select class="consUnitCarSel" data-idx="${i}">
+              <option value="">اختر السيارة...</option>
+              ${DB.cars.map(c=>`<option value="${c.carNo}" ${c.carNo===un.carNo?'selected':''}>🚗 ${c.carNo}</option>`).join('')}
+            </select>
+          </div>
+          <button class="bs bghost" type="button" data-a="consrmunit" data-idx="${i}" style="padding:11px 14px;">🗑️</button>
+        </div>
+      </div>`).join('')}
+    <button class="bs bghost" type="button" data-a="consaddunit" style="width:100%;margin-bottom:14px;">➕ إضافة مندوب/سيارة</button>
+    <button class="bs bgo" type="button" data-a="consrun" style="width:100%;">🚀 تشغيل التوزيع الذكي</button>
+  </div>`;
+}
+function rConsPlanView(){
+  const plan=S.consPlan;
+  const totalOrders=plan.units.reduce((n,u)=>n+u.orderCount,0);
+  const totalQtyAll=plan.units.reduce((n,u)=>n+u.totalQty,0);
+  const totalKmAll=plan.units.reduce((n,u)=>n+u.totalKm,0);
+  return `<div class="stitle">مراجعة التوزيع المقترح</div>
+  <div class="ssub">راجع أوردرات كل مندوب، وانقل أي أوردر يدويًا لو محتاج — الكيلومترات والعدد بيتحدّثوا فورًا — ثم اعتمد التوزيع</div>
+  <div class="content">
+    <div class="card">
+      <div class="kv"><span>إجمالي الأوردرات الموزّعة</span><b>${totalOrders}</b></div>
+      <div class="kv"><span>إجمالي الكمية</span><b>${totalQtyAll}</b></div>
+      <div class="kv"><span>إجمالي الكيلومترات المقدّرة</span><b>${totalKmAll.toFixed(1)} كم</b></div>
+      <div class="kv"><span>عدد المندوبين المشاركين</span><b>${plan.units.length}</b></div>
+    </div>
+    ${plan.units.map((un,idx)=>`
+    <div class="card">
+      <div class="ch"><div><div class="ctitle">🧍 ${un.repName||'-'} · 🚗 ${un.carNo||'-'}</div>
+      <div class="cmeta">${un.orderCount} أوردر · كمية ${un.totalQty} · ${un.totalKm.toFixed(1)} كم تقديري</div></div></div>
+      ${un.stops.length===0?`<div style="font-size:11.5px;color:var(--muted);padding:6px 0;">لا توجد أوردرات مُسندة لهذا المندوب</div>`:un.stops.map(st=>`
+        <div style="border-top:1px solid var(--line);padding:6px 0;">
+          <div style="font-weight:800;font-size:12.5px;">${st.cname||st.ccode}${st.region?' · 📍 '+st.region:''}${!st.loc?' · <span style="color:var(--warn);">بدون موقع محفوظ</span>':''}</div>
+          ${st.orders.map(o=>`<div class="kv" style="padding:2px 0;align-items:center;"><span>${o.iname||o.icode||''} (${o.qty||''})${o.inv?' · SO:'+o.inv:''}</span>
+            <select class="consMoveSel" data-oid="${o.id}" data-from="${idx}" style="font-size:10.5px;padding:2px 5px;max-width:150px;">
+              ${plan.units.map((u2,i2)=>`<option value="${i2}" ${i2===idx?'selected':''}>${i2===idx?'بدون نقل':'➜ '+(u2.repName||('مندوب '+(i2+1)))}</option>`).join('')}
+            </select></div>`).join('')}
+        </div>`).join('')}
+    </div>`).join('')}
+    <div class="brow" style="margin-top:6px;gap:8px;">
+      <button class="bs bghost" type="button" data-a="consdiscard" style="width:50%;">✕ إلغاء والبدء من جديد</button>
+      <button class="bs bgo" type="button" data-a="consconfirm" style="width:50%;">✅ اعتماد التوزيع</button>
+    </div>
+  </div>`;
+}
+function doConsRun(){
+  if(!['admin','cars'].includes(S.user.role))return;
+  const units=(S.consUnits||[]).filter(u=>u.repName&&u.carNo);
+  if(!units.length){toast('⛔ حدد مندوبًا وسيارة واحدة على الأقل قبل التشغيل');return;}
+  const carSet=new Set(units.map(u=>u.carNo));
+  if(carSet.size!==units.length){toast('⛔ لا يمكن استخدام نفس رقم السيارة لأكثر من مندوب في نفس الجولة');return;}
+  const repSet=new Set(units.map(u=>u.repName));
+  if(repSet.size!==units.length){toast('⛔ لا يمكن تكرار نفس المندوب أكثر من مرة في نفس الجولة');return;}
+  const pending=pendingConsolidationOrders();
+  if(!pending.length){toast('⚠️ لا توجد أوردرات بانتظار السيارات حاليًا للتوزيع');return;}
+  const planUnits=runSmartConsolidation(units);
+  S.consPlan={units:planUnits,builtAt:Date.now()};
+  toast('✅ تم التوزيع المبدئي — راجع كل مندوب وعدّل لو محتاج قبل الاعتماد');
+  render();
+}
+async function doConsConfirm(){
+  if(!['admin','cars'].includes(S.user.role)||!S.consPlan)return;
+  const allOrders=[];
+  S.consPlan.units.forEach(un=>{
+    un.stops.forEach(st=>{
+      st.orders.forEach(o=>{
+        const full=DB.orders.find(x=>x.id===o.id);
+        if(!full)return;
+        full.repName=un.repName;full.carNo=un.carNo;
+        const carRec=DB.cars.find(c=>c.carNo===un.carNo);
+        full.carPhoto=carRec?carRec.photo:'';
+        const drvUser=DB.users.find(u=>u.role==='rep'&&(u.name===un.repName||u.username===un.repName));
+        full.driverPhoto=(drvUser&&drvUser.photo)?drvUser.photo:'';
+        full.stage=(full.kind==='customer_return')?'customer_return_pending_wh':'pending_warehouse';
+        full.updAt=Date.now();
+        full.consolidatedAt=Date.now();full.consolidatedBy=S.user.name;
+        allOrders.push(full);
+      });
+    });
+  });
+  if(!allOrders.length){toast('⚠️ لا توجد أوردرات للاعتماد');return;}
+  const ok=await svo(allOrders);
+  if(!ok){toast('⚠️ فشل حفظ التوزيع — تحقق من الاتصال وحاول تاني');return;}
+  const repsList=S.consPlan.units.map(u=>u.repName).join('، ');
+  await logEditEntry({type:'smart_consolidation',orderIds:allOrders.map(o=>o.id),label:'توزيع ذكي — '+allOrders.length+' أوردر على '+S.consPlan.units.length+' مندوب',reason:'تشغيل التوزيع الذكي وتوزيع الأوردرات على: '+repsList});
+  toast(`✅ تم اعتماد التوزيع وإرسال ${allOrders.length} أوردر للمخازن`);
+  S.consPlan=null;S.consUnits=[];S.tab='home';S.oid=null;render();
+}
+
 /* ===== BIND ===== */
 function sameDay(ts,d){const a=new Date(ts||0);return a.getFullYear()===d.getFullYear()&&a.getMonth()===d.getMonth()&&a.getDate()===d.getDate();}
 
@@ -4169,6 +4496,17 @@ function bind(){
   if(erSrcSelEl)erSrcSelEl.addEventListener('change',()=>{S.editRepSel=erSrcSelEl.value;render();});
   const eosEl=document.getElementById('eos');
   if(eosEl)eosEl.addEventListener('input',()=>{S.editOrderSearch=eosEl.value;debouncedRender(()=>{render();const e2=document.getElementById('eos');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});});
+  document.querySelectorAll('.consUnitRepSel').forEach(sel=>{
+    sel.addEventListener('change',()=>{const i=+sel.dataset.idx;if(S.consUnits&&S.consUnits[i])S.consUnits[i].repName=sel.value;});
+  });
+  document.querySelectorAll('.consUnitCarSel').forEach(sel=>{
+    sel.addEventListener('change',()=>{const i=+sel.dataset.idx;if(S.consUnits&&S.consUnits[i])S.consUnits[i].carNo=sel.value;});
+  });
+  document.querySelectorAll('.consMoveSel').forEach(sel=>{
+    sel.addEventListener('change',()=>{moveOrderInPlan(sel.dataset.oid,+sel.dataset.from,+sel.value);render();});
+  });
+  const restoreFileEl=document.getElementById('restoreFileInput');
+  if(restoreFileEl)restoreFileEl.addEventListener('change',onRestoreFile);
   const n2cntEl=document.getElementById('n2cnt');if(n2cntEl)n2cntEl.addEventListener('change',()=>updateN2LabOptions(n2cntEl.value));
   f('crf',onCounterReturn);
   const crlabEl=document.getElementById('crlab');if(crlabEl)crlabEl.addEventListener('change',()=>updateCRCounterOptions(crlabEl.value));
@@ -4416,7 +4754,7 @@ function onA(e){
 function onAInner(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen','consaddunit','consrmunit','consdiscard','restorecancel']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -4523,6 +4861,14 @@ function onAInner(e){
   else if(a==='editpickorder'){S.editSelOid=id;render();}
   else if(a==='editpickbatch'){S.editBatchKey=el.dataset.key;render();}
   else if(a==='editclearsel'){S.editSelOid=null;S.editBatchKey=null;S.editRepSel=null;render();}
+  else if(a==='consaddunit'){S.consUnits=(S.consUnits||[]).concat([{repName:'',carNo:''}]);render();}
+  else if(a==='consrmunit'){const i=+el.dataset.idx;if(S.consUnits)S.consUnits.splice(i,1);render();}
+  else if(a==='consrun'){doConsRun();}
+  else if(a==='consdiscard'){S.consPlan=null;render();}
+  else if(a==='consconfirm'){doConsConfirm();}
+  else if(a==='backupnow'){doBackup();}
+  else if(a==='restorecancel'){S.restorePending=null;render();}
+  else if(a==='restoreconfirm'){doRestoreConfirm();}
 }
 
 async function requestNotifPermission(){
