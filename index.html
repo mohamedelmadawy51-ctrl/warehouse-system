@@ -1548,7 +1548,15 @@ const XLS_IMPORT_FIELDS=[
 let xlsImp=null; // {fileName,headers,rawRows,mapping,repMap,step,parsedRows}
 
 // ===== استيراد بيانات أساسية دفعة واحدة (أصناف + عملاء + سائقين) من ملف إكسيل واحد =====
-let mdImp=null; // {fileName,drivers,items,customers,step,importing,importError}
+let mdImp=null; // {fileName,drivers,items,customers,labs,cars,employees,step,importing,importError}
+// تسمية الأدوار الوظيفية اللي ممكن تتضاف كموظفين من ملف البيانات الأساسية (غير السائقين/المناديب)
+const MD_EMP_ROLES=[
+  {role:'data_entry',label:'مدخلي البيانات', codeK:'deCode', nameK:'deName', phoneK:'dePhone', codeAliases:['كود مدخل البيانات'],nameAliases:['اسم مدخل البيانات'],phoneAliases:['تليفون مدخل البيانات','موبايل مدخل البيانات']},
+  {role:'warehouse',  label:'أمناء المخازن', codeK:'whCode', nameK:'whName', phoneK:'whPhone', codeAliases:['كود أمين المخزن','كود امين المخزن'],nameAliases:['اسم أمين المخزن','اسم امين المخزن'],phoneAliases:['تليفون أمين المخزن','تليفون امين المخزن']},
+  {role:'accounts',   label:'حسابات العملاء', codeK:'accCode',nameK:'accName',phoneK:'accPhone',codeAliases:['كود موظف الحسابات'],nameAliases:['اسم موظف الحسابات'],phoneAliases:['تليفون موظف الحسابات']},
+  {role:'cars',       label:'موظفي السيارات', codeK:'carEmpCode',nameK:'carEmpName',phoneK:'carEmpPhone',codeAliases:['كود موظف السيارات'],nameAliases:['اسم موظف السيارات'],phoneAliases:['تليفون موظف السيارات']},
+  {role:'quality',    label:'إدارة الجودة', codeK:'qcCode',nameK:'qcName',phoneK:'qcPhone',codeAliases:['كود موظف الجودة'],nameAliases:['اسم موظف الجودة'],phoneAliases:['تليفون موظف الجودة']},
+];
 function parseMasterDataRows(rows){
   const specs=[
     {key:'drvId',aliases:['driv. id','driv id','driver id','كود السائق','معرف السائق']},
@@ -1559,6 +1567,15 @@ function parseMasterDataRows(rows){
     {key:'itmSector',aliases:['القطاع (site)','القطاع','site']},
     {key:'custCode',aliases:['customer account','كود العميل']},
     {key:'custName',aliases:['name','اسم العميل']},
+    {key:'labCode',aliases:['كود المعمل']},
+    {key:'labName',aliases:['اسم المعمل']},
+    {key:'labCust',aliases:['كود عميل المعمل','عميل المعمل']},
+    {key:'carNo',aliases:['رقم السيارة','كود السيارة','رقم العربية']},
+    ...MD_EMP_ROLES.flatMap(r=>[
+      {key:r.codeK,aliases:r.codeAliases},
+      {key:r.nameK,aliases:r.nameAliases},
+      {key:r.phoneK,aliases:r.phoneAliases},
+    ]),
   ];
   let headerRow=-1;
   const colIdx={};
@@ -1575,16 +1592,24 @@ function parseMasterDataRows(rows){
     });
     if(foundAny){headerRow=r;break;}
   }
-  const drivers=[],items=[],customers=[];
-  if(headerRow<0)return{drivers,items,customers,headerFound:false};
+  const drivers=[],items=[],customers=[],labs=[],cars=[],employees=[];
+  if(headerRow<0)return{drivers,items,customers,labs,cars,employees,headerFound:false};
   for(let r=headerRow+1;r<rows.length;r++){
     const row=rows[r]||[];
     const g=k=>colIdx[k]!=null?xh(String(row[colIdx[k]]||'')):'';
     if(colIdx.drvName!=null){const name=g('drvName');if(name)drivers.push({id:g('drvId'),name,phone:g('drvPhone')});}
     if(colIdx.itmCode!=null){const code=g('itmCode');if(code)items.push({code,name:g('itmName'),sector:g('itmSector')});}
     if(colIdx.custCode!=null){const code=g('custCode');if(code)customers.push({code,name:g('custName')});}
+    if(colIdx.labName!=null){const code=g('labCode'),name=g('labName');if(code&&name)labs.push({code,name,custCode:g('labCust')});}
+    if(colIdx.carNo!=null){const no=g('carNo');if(no)cars.push({carNo:no});}
+    MD_EMP_ROLES.forEach(rl=>{
+      if(colIdx[rl.nameK]!=null){
+        const name=g(rl.nameK);
+        if(name)employees.push({code:g(rl.codeK),name,phone:g(rl.phoneK),role:rl.role,roleLabel:rl.label});
+      }
+    });
   }
-  return{drivers,items,customers,headerFound:true};
+  return{drivers,items,customers,labs,cars,employees,headerFound:true};
 }
 async function onMasterDataFile(e){
   const file=e.target.files[0];if(!file)return;
@@ -1597,12 +1622,17 @@ async function onMasterDataFile(e){
     const ws=wb.Sheets[wb.SheetNames[0]];
     const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''});
     const parsed=parseMasterDataRows(rows);
-    if(!parsed.headerFound||(!parsed.drivers.length&&!parsed.items.length&&!parsed.customers.length)){
+    if(!parsed.headerFound||(!parsed.drivers.length&&!parsed.items.length&&!parsed.customers.length&&!parsed.labs.length&&!parsed.cars.length&&!parsed.employees.length)){
       toast('⚠️ لم يتم التعرف على أعمدة معروفة بالملف — راجع أسماء عناوين الأعمدة');
       return;
     }
     mdImp={fileName:file.name,...parsed,step:'preview',importing:false,importError:null};
-    toast(`✅ تم التعرف على ${parsed.drivers.length} سائق، ${parsed.items.length} صنف، ${parsed.customers.length} عميل`);
+    const extra=[
+      parsed.labs.length?`${parsed.labs.length} معمل`:'',
+      parsed.cars.length?`${parsed.cars.length} سيارة`:'',
+      parsed.employees.length?`${parsed.employees.length} موظف`:'',
+    ].filter(Boolean).join('، ');
+    toast(`✅ تم التعرف على ${parsed.drivers.length} سائق، ${parsed.items.length} صنف، ${parsed.customers.length} عميل${extra?'، '+extra:''}`);
     render();
   }catch(err){console.error('master data parse error',err);toast('⛔ تعذّرت قراءة الملف — تأكد أنه ملف Excel صحيح');}
 }
@@ -1637,8 +1667,43 @@ async function mdConfirmImport(){
         drvNew++;
       }
     });
-    await Promise.all([svs(),svi(),svc(),svu()]);
-    toast(`✅ تم الاستيراد — أصناف: ${itemsNew} جديد/${itemsUpd} تحديث · عملاء: ${custNew} جديد/${custUpd} تحديث · سائقين: ${drvNew} جديد/${drvUpd} تحديث${sectorsNew?` · ${sectorsNew} قطاع جديد`:''}`);
+    // المعامل: تتحدث بالكود، وبتنضم لعميلها (لو العمود موجود) بدون ما تشيل عملاء اتضافوا للمعمل يدويًا قبل كده
+    let labsNew=0,labsUpd=0;
+    (mdImp.labs||[]).forEach(l=>{
+      const existing=DB.labs.find(x=>x.code===l.code);
+      if(existing){
+        existing.name=l.name||existing.name;
+        if(l.custCode){const cc=existing.custCodes||(existing.custCodes=[]);if(!cc.includes(l.custCode))cc.push(l.custCode);}
+        labsUpd++;
+      }else{
+        DB.labs.push({code:l.code,name:l.name||'',custCodes:l.custCode?[l.custCode]:[]});
+        labsNew++;
+      }
+    });
+    // أرقام السيارات: بتتضاف كأسطول بدون صورة إلزامية (تقدر تتحدث بصورة لاحقًا من شاشة إدارة السيارات)
+    let carsNew=0;
+    (mdImp.cars||[]).forEach(c=>{
+      if(!DB.cars.some(x=>x.carNo===c.carNo)){DB.cars.push({carNo:c.carNo,photo:'',createdAt:Date.now()});carsNew++;}
+    });
+    // الموظفين (مدخلي بيانات/أمناء مخازن/حسابات/سيارات/جودة): بيتحدثوا أو يتضافوا كمستخدمين بنفس أسلوب السائقين
+    let empNew=0,empUpd=0;
+    (mdImp.employees||[]).forEach(emp=>{
+      const un=emp.role+'_'+(emp.code||emp.name).toString().replace(/\s+/g,'');
+      const existing=DB.users.find(x=>x.username===un);
+      if(existing){existing.name=emp.name||existing.name;existing.phone=emp.phone||existing.phone;existing.role=emp.role;empUpd++;}
+      else{
+        const pwd=(emp.phone||'').replace(/\D/g,'').slice(-4)||'1234';
+        DB.users.push({username:un,password:pwd,name:emp.name,role:emp.role,active:true,phone:emp.phone||''});
+        empNew++;
+      }
+    });
+    await Promise.all([svs(),svi(),svc(),svu(),svla(),svcar()]);
+    const extraMsg=[
+      (labsNew||labsUpd)?`معامل: ${labsNew} جديد/${labsUpd} تحديث`:'',
+      carsNew?`سيارات: ${carsNew} جديد`:'',
+      (empNew||empUpd)?`موظفين: ${empNew} جديد/${empUpd} تحديث`:'',
+    ].filter(Boolean).join(' · ');
+    toast(`✅ تم الاستيراد — أصناف: ${itemsNew} جديد/${itemsUpd} تحديث · عملاء: ${custNew} جديد/${custUpd} تحديث · سائقين: ${drvNew} جديد/${drvUpd} تحديث${sectorsNew?` · ${sectorsNew} قطاع جديد`:''}${extraMsg?' · '+extraMsg:''}`);
     mdImp=null;S.pageShow.mdCustPreview=undefined;S.pageShow.mdItemPreview=undefined;render();
   }catch(err){
     console.error('mdConfirmImport error',err);
@@ -1866,7 +1931,7 @@ function rMasterDataImport(){
       <div class="spinner" style="margin:0 auto 18px;"></div>
       <div style="font-weight:900;font-size:15px;color:var(--blue2);margin-bottom:8px;">⏳ جارِ استيراد البيانات الأساسية...</div>
       <div style="font-size:12px;color:var(--muted);line-height:1.9;max-width:340px;margin:0 auto;">
-        بيتم حفظ ${mdImp.items.length} صنف و${mdImp.customers.length} عميل و${mdImp.drivers.length} سائق. ممكن ياخد دقيقة أو أكتر حسب سرعة الإنترنت خصوصًا لو عدد العملاء كبير.<br><br>
+        بيتم حفظ ${mdImp.items.length} صنف و${mdImp.customers.length} عميل و${mdImp.drivers.length} سائق${mdImp.labs.length?` و${mdImp.labs.length} معمل`:''}${mdImp.cars.length?` و${mdImp.cars.length} سيارة`:''}${mdImp.employees.length?` و${mdImp.employees.length} موظف`:''}. ممكن ياخد دقيقة أو أكتر حسب سرعة الإنترنت خصوصًا لو عدد العملاء كبير.<br><br>
         <b style="color:var(--blue2);">من فضلك سيب الصفحة مفتوحة لحد ما تظهر رسالة تأكيد.</b>
       </div>
     </div>`;
@@ -1884,8 +1949,19 @@ function rMasterDataImport(){
   }
   if(!mdImp){
     return `
-    <div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;">
-      ℹ️ ملف واحد فيه 3 أقسام: السائقين (Driv. ID / Driver Name / Phone)، الأصناف (كود الصنف / اسم الصنف / القطاع)، العملاء (Name / Customer account). أي عنصر برقم/كود موجود بالفعل هيتحدّث، والجديد هيتضاف — تقدر ترفع نفس الملف تاني في أي وقت للتحديث.
+    <div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;line-height:1.9;">
+      ℹ️ ملف واحد ممكن يحتوي على أي عدد من الأقسام دي (حسب عناوين الأعمدة في أول صف — أضف بس الأعمدة اللي محتاجها):<br>
+      🧍 السائقين/المناديب: Driv. ID / Driver Name / Phone<br>
+      📦 الأصناف: كود الصنف / اسم الصنف / القطاع<br>
+      🏢 العملاء: Name / Customer account<br>
+      🧪 المعامل: كود المعمل / اسم المعمل / كود عميل المعمل<br>
+      🚗 أرقام السيارات: رقم السيارة<br>
+      ⌨️ مدخلي البيانات: كود مدخل البيانات / اسم مدخل البيانات / تليفون مدخل البيانات<br>
+      🏬 أمناء المخازن: كود أمين المخزن / اسم أمين المخزن / تليفون أمين المخزن<br>
+      💰 حسابات العملاء: كود موظف الحسابات / اسم موظف الحسابات / تليفون موظف الحسابات<br>
+      🚙 موظفي السيارات: كود موظف السيارات / اسم موظف السيارات / تليفون موظف السيارات<br>
+      ✅ إدارة الجودة: كود موظف الجودة / اسم موظف الجودة / تليفون موظف الجودة<br>
+      أي عنصر برقم/كود موجود بالفعل هيتحدّث، والجديد هيتضاف — تقدر ترفع نفس الملف تاني في أي وقت للتحديث.
     </div>
     <label class="attachbtn" for="mdFileInput">📎 اختيار ملف Excel</label>
     <input type="file" id="mdFileInput" accept=".xlsx,.xls,.csv" style="display:none;">`;
@@ -1893,6 +1969,7 @@ function rMasterDataImport(){
   if(mdImp.step==='preview'){
     const itPg=pageSlice(mdImp.items,'mdItemPreview',30);
     const cuPg=pageSlice(mdImp.customers,'mdCustPreview',30);
+    const totalRows=mdImp.drivers.length+mdImp.items.length+mdImp.customers.length+mdImp.labs.length+mdImp.cars.length+mdImp.employees.length;
     return `
     <div class="slabel">🧍 السائقين/المناديب (${mdImp.drivers.length})</div>
     <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
@@ -1911,9 +1988,27 @@ function rMasterDataImport(){
       <tbody>${cuPg.rows.map(c=>`<tr><td>${c.code}</td><td>${c.name}</td></tr>`).join('')||'<tr><td colspan="2" style="text-align:center;color:var(--muted);">لا يوجد</td></tr>'}</tbody>
     </table></div>
     ${loadMoreBtn('mdCustPreview',cuPg)}
+    ${mdImp.labs.length?`
+    <div class="slabel" style="margin-top:14px;">🧪 المعامل (${mdImp.labs.length})</div>
+    <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
+      <thead><tr><th>الكود</th><th>الاسم</th><th>عميل مرتبط</th></tr></thead>
+      <tbody>${mdImp.labs.map(l=>`<tr><td>${l.code}</td><td>${l.name}</td><td>${l.custCode||'-'}</td></tr>`).join('')}</tbody>
+    </table></div>`:''}
+    ${mdImp.cars.length?`
+    <div class="slabel" style="margin-top:14px;">🚗 أرقام السيارات (${mdImp.cars.length})</div>
+    <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
+      <thead><tr><th>رقم السيارة</th></tr></thead>
+      <tbody>${mdImp.cars.map(c=>`<tr><td>${c.carNo}</td></tr>`).join('')}</tbody>
+    </table></div>`:''}
+    ${mdImp.employees.length?`
+    <div class="slabel" style="margin-top:14px;">👥 الموظفين (${mdImp.employees.length})</div>
+    <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
+      <thead><tr><th>الكود</th><th>الاسم</th><th>الهاتف</th><th>الوظيفة</th></tr></thead>
+      <tbody>${mdImp.employees.map(e=>`<tr><td>${e.code||'-'}</td><td>${e.name}</td><td>${e.phone||'-'}</td><td>${e.roleLabel||e.role}</td></tr>`).join('')}</tbody>
+    </table></div>`:''}
     <div class="brow" style="margin-top:14px;">
       <button type="button" class="bs bghost" data-a="md-cancel">✖ إلغاء</button>
-      <button type="button" class="bs bgreen" data-a="md-confirm">✅ تأكيد الاستيراد (${mdImp.drivers.length + mdImp.items.length + mdImp.customers.length} سطر)</button>
+      <button type="button" class="bs bgreen" data-a="md-confirm">✅ تأكيد الاستيراد (${totalRows} سطر)</button>
     </div>`;
   }
   return '';
