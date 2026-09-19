@@ -11,6 +11,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <style>
 :root{
   --blue:#0B2E5C;--blue2:#1651A6;--blue-lg:#E8F0FE;
@@ -440,6 +441,13 @@ async function dbSet(k, v){
     await withTimeout(FDB.ref(ROOT+k).set(v), 20000, k);
   }catch(e){ console.error('Firebase write error',e); toast('⚠️ تعذّر الاتصال بقاعدة البيانات — تحقق من الإنترنت وحاول تاني'); }
 }
+async function dbRemove(k){
+  if(!FDB) return;
+  try{
+    if(IS_CONFIGURED)await ensureFirebaseAuth();
+    await withTimeout(FDB.ref(ROOT+k).remove(), 20000, k);
+  }catch(e){ console.error('Firebase remove error',e); throw e; }
+}
 
 // ===== تحميل الأوردرات بفلترة تاريخ (بدل تحميل التاريخ كله دفعة واحدة) =====
 // أوردرات "إضافة" (بضاعة الأمانة) بتتحمّل بالكامل دايمًا مهما كان النطاق الزمني،
@@ -570,6 +578,21 @@ function unseenEditsForAdmin(){
   return(DB.editLog||[]).filter(x=>(x.at||0)>seenAt&&x.byUser!==u.username).sort((a,b)=>(b.at||0)-(a.at||0));
 }
 function sname(code){const s=DB.sectors.find(x=>x.code===code);return s?s.name:'';}
+// خيارات درجات حفظ التخزين الشائعة (تُعرض كلها جنب بعض في قائمة منسدلة بدل الكتابة الحرة في كل مرة)
+const STORAGE_TEMP_OPTIONS=[
+  {v:'',l:'بدون تحديد'},
+  {v:'يُحفظ بالثلاجة (2° إلى 8°م)',l:'🧊 يُحفظ بالثلاجة (2° إلى 8°م)'},
+  {v:'يُحفظ بالفريزر (-15° إلى -25°م)',l:'❄️ يُحفظ بالفريزر (-15° إلى -25°م)'},
+  {v:'يُحفظ في درجة حرارة الغرفة (15° إلى 25°م)',l:'🌡️ يُحفظ في درجة حرارة الغرفة (15° إلى 25°م)'},
+  {v:'يُحفظ بعيدًا عن الضوء - لا يزيد عن 30°م',l:'☀️ يُحفظ بعيدًا عن الضوء - لا يزيد عن 30°م'},
+];
+function stFieldHtml(selId,otherId,current){
+  const known=STORAGE_TEMP_OPTIONS.some(o=>o.v===current);
+  const selVal=current?(known?current:'__other__'):'';
+  const opts=STORAGE_TEMP_OPTIONS.map(o=>`<option value="${o.v}" ${selVal===o.v?'selected':''}>${o.l}</option>`).join('')+`<option value="__other__" ${selVal==='__other__'?'selected':''}>✏️ أخرى (اكتب يدويًا)</option>`;
+  return `<select name="storageTemp" id="${selId}">${opts}</select>
+    <input type="text" name="storageTempOther" id="${otherId}" placeholder="اكتب نص حر، مثال: 2:8" value="${known?'':(current||'')}" style="margin-top:6px;display:${selVal==='__other__'?'block':'none'};">`;
+}
 function fmtStorageTemp(t){
   if(!t)return'';
   const m=String(t).trim().match(/^(-?\d+(?:\.\d+)?)\s*[:\-–]\s*(-?\d+(?:\.\d+)?)$/);
@@ -792,7 +815,9 @@ function moveOrderInPlan(orderId,fromIdx,toIdx){
   });
 }
 
-let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[],custLocations:{},editLog:[]};
+let DB={users:[],customers:[],items:[],orders:[],balances:{},sectors:[],labs:[],counters:[],labBalances:{},counterBalances:{},counterLog:[],nitrogenBalances:{},counterLabMeta:{},settings:{},cars:[],custLocations:{},editLog:[],archiveYears:[]};
+// كاش الأوردرات المؤرشفة المحمَّلة في الجلسة الحالية فقط — بالسنة، بيتحمّل عند الطلب مش وقت فتح التطبيق
+const archiveCache={};
 
 /* ============================================================
    نظام الخلفيات الديناميكية — IFT Veterinary
@@ -1050,6 +1075,7 @@ async function loadDB(){
     ['cars','ift_cars',[]],
     ['custLocations','ift_custLocations',{}],
     ['editLog','ift_editlog',[]],
+    ['archiveYears','ift_archive_meta',[]],
   ];
   // قراءة بيانات المستخدمين بشكل حرج ومنفصل (مع إعادة محاولة) — أهم بيانات في النظام ولازم لا نخطئ في التعامل معها
   dbLoadError=false;
@@ -1243,6 +1269,71 @@ async function svo(dirtyOrders){
   await dbSet('ift_balances',DB.balances);
   BAL_VERSION++;
   return ok;
+}
+
+// ================= نظام الأرشفة =================
+// الهدف: الأوردرات "المخلّصة" (سلمت/اتقفلت نهائيًا) واللي عدّت مدة معينة بتتنقل من ift_orders (المحمّلة بالكامل
+// في كل فتح للتطبيق) لعقدة منفصلة ift_orders_archive/<السنة>/<id> بتتحمّل بس عند الطلب (بحث الأرشيف).
+// كده حجم البيانات اللي بتتحمّل يوميًا يفضل صغير ومستقر مهما كبر تاريخ الشركة، من غير ما نفقد أي سجل قديم.
+// المراحل دي مأخوذة من نفس تصنيف "تم التنفيذ/مرفوض" المستخدم بالفعل في لوحة التحكم (dashboard) — مفيش مرحلة
+// اتحسبت هنا لوحدها، عشان منأرشفش غلط أوردر لسه في التنفيذ.
+const ARCHIVE_STAGES=['delivered','approved','returned','customer_returned','rejected','done','counter_returned'];
+function archiveThresholdDays(){return DB.settings.archiveAfterDays??180;}
+function getArchivableOrders(days){
+  const d=days??archiveThresholdDays();
+  const cutoff=Date.now()-(d*86400000);
+  return DB.orders.filter(o=>ARCHIVE_STAGES.includes(o.stage)&&(o.updAt||o.createdAt||0)>0&&(o.updAt||o.createdAt||0)<cutoff);
+}
+async function saveArchiveDays(days){
+  DB.settings.archiveAfterDays=days;
+  await dbSet('ift_settings',DB.settings);
+}
+// المرحلة 1: تجهيز نافذة التأكيد (مفيش أي كتابة لسه)
+function requestArchiveNow(){
+  const eligible=getArchivableOrders();
+  if(!eligible.length){toast('✅ لا يوجد أوردرات مؤهلة للأرشفة حاليًا');return;}
+  S.archiveConfirm={count:eligible.length,days:archiveThresholdDays()};
+  render();
+}
+function cancelArchive(){S.archiveConfirm=null;render();}
+// المرحلة 2: التنفيذ الفعلي — نقل أوردر أوردر (مسار مستقل لكل واحد)، فأي فشل جزئي ميأثرش على الباقي ولا يمسح حاجة تانية
+async function confirmArchiveNow(){
+  if(!navigator.onLine){toast('⚠️ محتاج اتصال إنترنت لتنفيذ الأرشفة');return;}
+  const eligible=getArchivableOrders();
+  if(!eligible.length){S.archiveConfirm=null;render();return;}
+  S.archiveRunning=true;render();
+  let moved=0,failed=0;const touchedYears=new Set();
+  for(const o of eligible){
+    const y=new Date(o.updAt||o.createdAt||Date.now()).getFullYear();
+    try{
+      await dbSet(`ift_orders_archive/${y}/${o.id}`,o);
+      await dbRemove(`ift_orders/${o.id}`);
+      DB.orders=DB.orders.filter(x=>x.id!==o.id);
+      touchedYears.add(y);
+      moved++;
+    }catch(e){console.error('archive move error',o.id,e);failed++;}
+  }
+  if(touchedYears.size){
+    const yrs=new Set([...(DB.archiveYears||[]),...touchedYears]);
+    DB.archiveYears=[...yrs].sort((a,b)=>b-a);
+    await dbSet('ift_archive_meta',DB.archiveYears);
+  }
+  if(moved){
+    try{await logEditEntry({type:'archive',orderIds:eligible.slice(0,50).map(o=>o.id),label:`أرشفة ${moved} أوردر أقدم من ${archiveThresholdDays()} يوم`,reason:'أرشفة تلقائية للأوردرات المخلّصة القديمة لتخفيف حجم البيانات اليومية'});}catch(_){}
+  }
+  S.archiveRunning=false;S.archiveConfirm=null;
+  toast(failed?`✅ تمت أرشفة ${moved} أوردر — تعذّر أرشفة ${failed} (جرّب تاني بعدين)`:`✅ تمت أرشفة ${moved} أوردر بنجاح`);
+  render();
+}
+// تحميل أوردرات سنة معينة من الأرشيف عند الطلب فقط (كاش في الجلسة عشان منكررش نفس التحميل)
+async function loadArchiveYear(year){
+  if(archiveCache[year])return archiveCache[year];
+  S.archiveLoading=year;render();
+  const data=await dbGet(`ift_orders_archive/${year}`,{});
+  const list=data?Object.values(data):[];
+  archiveCache[year]=list;
+  S.archiveLoading=null;
+  return list;
 }
 function n2bal(loc){return DB.nitrogenBalances[loc]||0;}
 
@@ -1499,7 +1590,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:'',consUnits:[],consPlan:null,restorePending:null,admTab:'users',editItem:null};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:'',consUnits:[],consPlan:null,restorePending:null,admTab:'users',editItem:null,archiveConfirm:null,archiveRunning:false,archiveLoading:null,archiveYear:null,archiveSearch:''};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -2239,7 +2330,38 @@ async function init(){
   dbReady=true;
   if(IS_CONFIGURED && !dbLoadError){startRealTimeSync();}
   if(window.__refreshSyncBadge)window.__refreshSyncBadge();
+  applyPublicManifestLinkIfAny(); // لو الرابط ده جاي من مسح كود QR لإذن مجمع، نفتحه على طول من غير تسجيل دخول
   if(S.screen==='signin')render(); // لو كانت شاشة الدخول متفتحة وقت اكتمال التحميل، نحدّثها
+}
+// لو الرابط فيه ?pubmf=1&rep=...&date=... (جاي من مسح كود QR أسفل إذن مجمع)، نفتح شاشة الإذن المجمع دي مباشرة
+// بدون الحاجة لتسجيل دخول — نفس المستوى الحالي لحماية البيانات في التطبيق (قاعدة البيانات بالفعل مقروءة بحرية من أي حد معاه الرابط)
+function applyPublicManifestLinkIfAny(){
+  try{
+    const qs=new URLSearchParams(location.search);
+    if(qs.get('pubmf')!=='1')return;
+    const rep=qs.get('rep');
+    if(!rep)return;
+    const date=qs.get('date')||'all';
+    S.printRep=rep;
+    if(date==='all'){S.repCalAll=true;}
+    else{S.repCalAll=false;S.repCalDate=date;}
+    render();
+  }catch(e){/* رابط غير سليم — نتجاهله ونكمل تشغيل التطبيق عادي */}
+}
+// إنشاء كود QR (SVG) لرابط عام يفتح نفس الإذن المجمع مباشرة — يُستخدم أسفل الإذن المجمع عند الطباعة/PDF
+function manifestShareUrl(rn){
+  const base=location.origin+location.pathname;
+  const date=S.repCalAll?'all':(S.repCalDate||ymd(Date.now()));
+  return `${base}?pubmf=1&rep=${encodeURIComponent(rn)}&date=${encodeURIComponent(date)}`;
+}
+function buildQRSvg(text){
+  try{
+    if(typeof qrcode==='undefined')return '';
+    const qr=qrcode(0,'M');
+    qr.addData(text);
+    qr.make();
+    return qr.createSvgTag({cellSize:4,margin:2,scalable:true});
+  }catch(e){return '';}
 }
 async function retryLoadUsers(){
   dbReady=false;render();
@@ -3280,6 +3402,10 @@ function rManifest(rn){
         <div class="sigbox"><div class="sigline">توقيع المندوب</div></div>
         <div class="sigbox"><div class="sigline">توقيع المسؤول</div></div>
       </div>
+      <div class="mqr" style="text-align:center;margin-top:18px;padding-top:14px;border-top:1px dashed var(--line);">
+        <div style="display:inline-block;width:104px;">${buildQRSvg(manifestShareUrl(rn))}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:6px;">📱 امسح الكود بالموبايل لعرض/حفظ نسخة PDF كاملة من هذا الإذن المجمع في أي وقت</div>
+      </div>
     </div>
   </div>`;
 }
@@ -4088,6 +4214,7 @@ const ADM_TABS=[
   {k:'counters',l:'🎫 كونترات'},
   {k:'cars',l:'🚗 سيارات'},
   {k:'import',l:'📥 استيراد'},
+  {k:'archive',l:'🗄️ الأرشيف'},
 ];
 function rAdm(){
   const t=S.admTab||'users';
@@ -4099,7 +4226,8 @@ function rAdm(){
     t==='labs'?rAdmLabs():
     t==='counters'?rAdmCounters():
     t==='cars'?rAdmCars():
-    t==='import'?rAdmImport():''
+    t==='import'?rAdmImport():
+    t==='archive'?rAdmArchive():''
   );
   return`
   <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف · سيارات</div>
@@ -4185,7 +4313,7 @@ function rAdmItems(){return`
         <div class="field"><label>القطاع</label><select name="sector" required>${DB.sectors.length?DB.sectors.map(s=>`<option value="${s.code}">${s.name}</option>`).join(''):'<option value="">أضف قطاعاً أولاً</option>'}</select></div>
       </div>
       <div class="row2"><div class="field"><label>⚖️ وزن الوحدة (كجم)</label><input name="weight" type="number" step="0.001" min="0" placeholder="مثال: 0.5"></div>
-        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label><input name="storageTemp" placeholder="مثال: 2:8"></div>
+        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label>${stFieldHtml('aiStorageSel','aiStorageOther','')}</div>
       </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--blue2);margin:4px 0 12px;"><input type="checkbox" name="needsCounter" style="width:16px;height:16px;"> 🎫 هذا الصنف يحتاج كونتر (نيتروجين) عند الصرف/التحويل</label>
       <button class="btn-primary" type="submit">إضافة</button></form>
@@ -4205,7 +4333,7 @@ function rAdmItems(){return`
         <div class="row2"><div class="field"><label>القطاع</label><select name="sector">${DB.sectors.map(s=>`<option value="${s.code}" ${i.sector===s.code?'selected':''}>${s.name}</option>`).join('')}</select></div>
           <div class="field"><label>⚖️ وزن الوحدة (كجم)</label><input name="weight" type="number" step="0.001" min="0" value="${i.weight||''}"></div>
         </div>
-        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label><input name="storageTemp" value="${i.storageTemp||''}" placeholder="مثال: 2:8"></div>
+        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label>${stFieldHtml('eiStorageSel','eiStorageOther',i.storageTemp||'')}</div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--blue2);margin:4px 0 12px;"><input type="checkbox" name="needsCounter" ${i.needsCounter?'checked':''} style="width:16px;height:16px;"> 🎫 يحتاج كونتر (نيتروجين)</label>
         <div style="display:flex;gap:8px;">
           <button class="btn-primary" type="submit" style="flex:1;">💾 حفظ التعديلات</button>
@@ -4290,6 +4418,66 @@ function rAdmImport(){return`
     <div class="card">
       ${rMasterDataImport()}
     </div>`;
+}
+function rAdmArchive(){
+  const days=archiveThresholdDays();
+  const eligible=getArchivableOrders(days).length;
+  const years=DB.archiveYears||[];
+  const yearData=(S.archiveYear&&archiveCache[S.archiveYear])?archiveCache[S.archiveYear]:[];
+  const q=xh(S.archiveSearch||'').toLowerCase();
+  const filtered=q?yearData.filter(o=>[o.inv,o.cname,o.ccode,o.icode,o.iname,o.repName,o.batch,o.note].some(v=>(v||'').toString().toLowerCase().includes(q))):yearData;
+  const pg=pageSlice(filtered,'archiveResults',30);
+  return `
+  <div class="card" style="background:var(--blue-lg);border-color:var(--blue2);">
+    <div style="font-weight:800;margin-bottom:6px;">🗄️ إيه هي الأرشفة؟</div>
+    <div style="font-size:12px;line-height:1.9;color:var(--blue2);">
+      الأوردرات "المخلّصة" (سلمت / اتقفلت / مرفوضة) اللي عدّت مدة معينة بتتنقل هنا من العمل اليومي — عشان التطبيق يفضل سريع مهما كبر تاريخ الشركة. أي أوردر لسه في التنفيذ <b>مش</b> بيتأرشف أبدًا، ومفيش أي بيانات بتتمسح نهائيًا — بس بتتنقل مكان تاني وترجعلها بالبحث تحت في أي وقت.
+    </div>
+  </div>
+
+  <div class="slabel">⚙️ إعدادات الأرشفة</div>
+  <form id="arsf">
+    <div class="field"><label>أرشفة الأوردرات المخلّصة الأقدم من (بالأيام)</label>
+      <input type="number" name="days" min="30" step="1" value="${days}" required>
+    </div>
+    <button class="btn-primary" type="submit">💾 حفظ الإعداد</button>
+  </form>
+
+  <div class="card" style="margin-top:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+      <div style="font-size:13px;">📊 <b>${eligible}</b> أوردر مؤهل للأرشفة الآن (مخلّص وأقدم من ${days} يوم)</div>
+      <button type="button" class="bs bgo" data-a="archivenow" ${eligible?'':'disabled'}>📦 أرشفة الآن</button>
+    </div>
+  </div>
+
+  ${S.archiveConfirm?`<div class="card" style="border-color:var(--warn);background:var(--warn-bg);margin-top:12px;">
+    <div style="font-weight:800;color:var(--blue);margin-bottom:8px;">⚠️ تأكيد الأرشفة</div>
+    <div style="font-size:12.5px;line-height:1.8;margin-bottom:12px;">هيتم نقل <b>${S.archiveConfirm.count}</b> أوردر مخلّص أقدم من ${S.archiveConfirm.days} يوم للأرشيف. العملية آمنة ومش بتمسح بيانات، بس محتاجة اتصال إنترنت مستقر لحد ما تخلّص. تحب تكمل؟</div>
+    <div class="brow">
+      <button type="button" class="bs bghost" data-a="archivecancel" ${S.archiveRunning?'disabled':''}>إلغاء</button>
+      <button type="button" class="bs bgreen" data-a="archiveconfirm" ${S.archiveRunning?'disabled':''}>${S.archiveRunning?'⏳ جارِ الأرشفة...':'✅ تأكيد ونقل الآن'}</button>
+    </div>
+  </div>`:''}
+
+  <div class="slabel" style="margin-top:16px;">🔍 البحث في الأرشيف</div>
+  ${years.length?`
+  <div class="row2">
+    <div class="field"><label>السنة</label>
+      <select id="archiveYearSel"><option value="">اختر سنة...</option>${years.map(y=>`<option value="${y}" ${String(S.archiveYear)===String(y)?'selected':''}>${y}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>بحث (رقم إذن / عميل / صنف)</label><input type="text" id="archiveSearchInput" value="${S.archiveSearch||''}" placeholder="اكتب للبحث..."></div>
+  </div>
+  ${S.archiveLoading?`<div style="text-align:center;padding:16px;color:var(--muted);font-size:12px;">⏳ جارِ تحميل أرشيف سنة ${S.archiveLoading}...</div>`:
+    S.archiveYear?`
+    <div style="font-size:11.5px;color:var(--muted);margin-bottom:6px;">${filtered.length} نتيجة من إجمالي ${yearData.length} أوردر مؤرشف في ${S.archiveYear}</div>
+    <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
+      <thead><tr><th>رقم الإذن</th><th>العميل</th><th>الصنف</th><th>الكمية</th><th>المندوب</th><th>الحالة</th><th>التاريخ</th></tr></thead>
+      <tbody>${pg.rows.map(o=>`<tr><td>${o.inv||'-'}</td><td>${o.cname||'-'}</td><td>${o.iname||'-'}</td><td>${o.qty||'-'}</td><td>${o.repName||'-'}</td><td>${SLBL[o.stage]||o.stage||'-'}</td><td>${(o.updAt||o.createdAt)?new Date(o.updAt||o.createdAt).toLocaleDateString('ar-EG'):'-'}</td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--muted);">لا يوجد نتائج</td></tr>'}</tbody>
+    </table></div>
+    ${loadMoreBtn('archiveResults',pg)}
+    `:'<div style="font-size:11.5px;color:var(--muted);">اختر سنة من فوق لعرض الأوردرات المؤرشفة فيها.</div>'}
+  `:`<div style="font-size:11.5px;color:var(--muted);">لسه مفيش أوردرات متأرشفة — أول عملية أرشفة هتظهر السنين هنا تلقائيًا.</div>`}
+  `;
 }
 
 /* ===== شاشة تعديلات الأوردرات / المندوب / الإذن المجمع بالكامل (بعد سحب الشيت) ===== */
@@ -4666,12 +4854,16 @@ function bind(){
       }
     });
   };
-  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('eif',onEI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);f('acarf',onACar);f('euf',onEU);
+  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('eif',onEI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);f('acarf',onACar);f('euf',onEU);f('arsf',onArchiveSettings);
   f('editorderf',onEditOrderSubmit);f('editrepf',onEditRepSubmit);f('editbatchf',onEditBatchSubmit);
   const rnSelEl=document.getElementById('rnSel');
   if(rnSelEl)rnSelEl.addEventListener('change',()=>{const ot=document.getElementById('rnOther');if(ot)ot.style.display=rnSelEl.value==='__other__'?'block':'none';});
   const cnSelEl=document.getElementById('cnSel');
   if(cnSelEl)cnSelEl.addEventListener('change',()=>{const ot=document.getElementById('cnOther');if(ot)ot.style.display=cnSelEl.value==='__other__'?'block':'none';});
+  const aiStorageSelEl=document.getElementById('aiStorageSel');
+  if(aiStorageSelEl)aiStorageSelEl.addEventListener('change',()=>{const ot=document.getElementById('aiStorageOther');if(ot)ot.style.display=aiStorageSelEl.value==='__other__'?'block':'none';});
+  const eiStorageSelEl=document.getElementById('eiStorageSel');
+  if(eiStorageSelEl)eiStorageSelEl.addEventListener('change',()=>{const ot=document.getElementById('eiStorageOther');if(ot)ot.style.display=eiStorageSelEl.value==='__other__'?'block':'none';});
   // إظهار/إخفاء حقل "اسم/رقم آخر" لكل نموذج من نماذج شاشة التعديلات (أوردر منفرد / نقل مندوب / إذن مجمع)
   [['eoRnSel','eoRnOther'],['eoCnSel','eoCnOther'],['erRnSel','erRnOther'],['erCnSel','erCnOther'],['ebRnSel','ebRnOther'],['ebCnSel','ebCnOther']].forEach(([selId,othId])=>{
     const selEl=document.getElementById(selId);
@@ -4710,6 +4902,15 @@ function bind(){
   const rsi=document.getElementById('repSearchInput');if(rsi)rsi.addEventListener('input',()=>{S.repSearch=rsi.value;debouncedRender(()=>{render();const e2=document.getElementById('repSearchInput');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});});
   const mfd=document.getElementById('mfDate');if(mfd)mfd.addEventListener('change',()=>{S.repCalDate=mfd.value;render();});
   const mfs=document.getElementById('mfSearch');if(mfs)mfs.addEventListener('input',()=>{S.repSearch=mfs.value;debouncedRender(()=>{render();const e2=document.getElementById('mfSearch');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});});
+  const archiveYearSelEl=document.getElementById('archiveYearSel');
+  if(archiveYearSelEl)archiveYearSelEl.addEventListener('change',async()=>{
+    const y=archiveYearSelEl.value;
+    S.archiveYear=y||null;S.pageShow.archiveResults=undefined;
+    if(y)await loadArchiveYear(y);
+    render();
+  });
+  const archiveSearchEl=document.getElementById('archiveSearchInput');
+  if(archiveSearchEl)archiveSearchEl.addEventListener('input',()=>{S.archiveSearch=archiveSearchEl.value;debouncedRender(()=>{render();const e2=document.getElementById('archiveSearchInput');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});});
   const af=document.getElementById('atf');if(af)af.addEventListener('change',onAtt);
   const daf=document.getElementById('dlvAttInput');if(daf)daf.addEventListener('change',onDlvAtt);
   const upf=document.getElementById('upf');if(upf)upf.addEventListener('change',onUPhoto);
@@ -4939,7 +5140,7 @@ function onA(e){
 function onAInner(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','edititem','admtab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen','consaddunit','consrmunit','consdiscard','restorecancel']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','edititem','admtab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen','consaddunit','consrmunit','consdiscard','restorecancel','archivenow','archivecancel']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -4965,6 +5166,9 @@ function onAInner(e){
   else if(a==='qc'){doQC(id);}
   else if(a==='logout'){stopAmbient();S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
   else if(a==='admtab'){S.admTab=el.dataset.t;render();}
+  else if(a==='archivenow'){requestArchiveNow();}
+  else if(a==='archivecancel'){cancelArchive();}
+  else if(a==='archiveconfirm'){confirmArchiveNow();}
   else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;pendDlvAtt=null;xlsImp=null;S.balDetailCust=null;render();}
   else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;if(el.dataset.type!=='excel_import')xlsImp=null;render();}
   else if(a==='xls-continue'){xlsContinueToPreview();}
@@ -5525,10 +5729,21 @@ async function onAC(e){
   DB.customers.push({code,name:f.get('name')});await svc();toast('تم إضافة العميل');e.target.reset();render();
 }
 
+async function onArchiveSettings(e){
+  e.preventDefault();
+  const f=new FormData(e.target);
+  const days=parseInt(f.get('days'),10);
+  if(!days||days<30){toast('⛔ الحد الأدنى 30 يوم');return;}
+  await saveArchiveDays(days);
+  toast('✅ تم حفظ إعداد الأرشفة');
+  render();
+}
 async function onAI(e){
   e.preventDefault();const f=new FormData(e.target);const code=f.get('code').trim();
   if(DB.items.some(i=>i.code===code)){toast('الكود مستخدم');return;}
-  const weight=(f.get('weight')||'').trim(),storageTemp=(f.get('storageTemp')||'').trim();
+  const weight=(f.get('weight')||'').trim();
+  let storageTemp=(f.get('storageTemp')||'').trim();
+  if(storageTemp==='__other__')storageTemp=(f.get('storageTempOther')||'').trim();
   DB.items.push({code,name:f.get('name'),unit:f.get('unit')||'',sector:f.get('sector')||'',needsCounter:!!f.get('needsCounter'),weight:weight?+weight:0,storageTemp});await svi();toast('تم إضافة الصنف');e.target.reset();render();
 }
 async function onEI(e){
@@ -5537,12 +5752,14 @@ async function onEI(e){
   const it=DB.items.find(x=>x.code===code);if(!it)return;
   const f=new FormData(e.target);
   const weight=(f.get('weight')||'').trim();
+  let storageTemp=(f.get('storageTemp')||'').trim();
+  if(storageTemp==='__other__')storageTemp=(f.get('storageTempOther')||'').trim();
   it.name=(f.get('name')||'').trim()||it.name;
   it.unit=(f.get('unit')||'').trim();
   it.sector=f.get('sector')||it.sector;
   it.needsCounter=!!f.get('needsCounter');
   it.weight=weight?+weight:0;
-  it.storageTemp=(f.get('storageTemp')||'').trim();
+  it.storageTemp=storageTemp;
   await svi();
   S.editItem=null;
   toast('✅ تم حفظ تعديلات الصنف');
