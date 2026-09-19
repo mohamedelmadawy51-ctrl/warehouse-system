@@ -570,6 +570,14 @@ function unseenEditsForAdmin(){
   return(DB.editLog||[]).filter(x=>(x.at||0)>seenAt&&x.byUser!==u.username).sort((a,b)=>(b.at||0)-(a.at||0));
 }
 function sname(code){const s=DB.sectors.find(x=>x.code===code);return s?s.name:'';}
+function fmtStorageTemp(t){
+  if(!t)return'';
+  const m=String(t).trim().match(/^(-?\d+(?:\.\d+)?)\s*[:\-–]\s*(-?\d+(?:\.\d+)?)$/);
+  if(m)return`يُحفظ من ${m[1]}° إلى ${m[2]}°م`;
+  return String(t);
+}
+function itemW(code){const it=DB.items.find(i=>i.code===code);return it&&it.weight?(+it.weight||0):0;}
+function itemStorage(code){const it=DB.items.find(i=>i.code===code);return it?it.storageTemp||'':'';}
 function lname(code){const l=DB.labs.find(x=>x.code===code);return l?l.name:'';}
 function cnname(code){const c=DB.counters.find(x=>x.code===code);return c?(c.name?c.code+' — '+c.name:c.code):'';}
 function ccap(code){const c=DB.counters.find(x=>x.code===code);return c&&c.capacity?c.capacity+' لتر':'-';}
@@ -1491,7 +1499,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:'',consUnits:[],consPlan:null,restorePending:null,admTab:'users'};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:'',consUnits:[],consPlan:null,restorePending:null,admTab:'users',editItem:null};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -1565,6 +1573,8 @@ function parseMasterDataRows(rows){
     {key:'itmCode',aliases:['كود الصنف']},
     {key:'itmName',aliases:['اسم الصنف']},
     {key:'itmSector',aliases:['القطاع (site)','القطاع','site']},
+    {key:'itmWeight',aliases:['الوزن','وزن الوحدة','وزن الوحدة (كجم)','weight']},
+    {key:'itmStorage',aliases:['درجة الحفظ','درجة حفظ التخزين','درجة التخزين','يحفظ من الى','تحفظ']},
     {key:'custCode',aliases:['customer account','كود العميل']},
     {key:'custName',aliases:['name','اسم العميل']},
     {key:'labCode',aliases:['كود المعمل']},
@@ -1598,7 +1608,7 @@ function parseMasterDataRows(rows){
     const row=rows[r]||[];
     const g=k=>colIdx[k]!=null?xh(String(row[colIdx[k]]||'')):'';
     if(colIdx.drvName!=null){const name=g('drvName');if(name)drivers.push({id:g('drvId'),name,phone:g('drvPhone')});}
-    if(colIdx.itmCode!=null){const code=g('itmCode');if(code)items.push({code,name:g('itmName'),sector:g('itmSector')});}
+    if(colIdx.itmCode!=null){const code=g('itmCode');if(code)items.push({code,name:g('itmName'),sector:g('itmSector'),weight:g('itmWeight'),storageTemp:g('itmStorage')});}
     if(colIdx.custCode!=null){const code=g('custCode');if(code)customers.push({code,name:g('custName')});}
     if(colIdx.labName!=null){const code=g('labCode'),name=g('labName');if(code&&name)labs.push({code,name,custCode:g('labCust')});}
     if(colIdx.carNo!=null){const no=g('carNo');if(no)cars.push({carNo:no});}
@@ -1649,8 +1659,15 @@ async function mdConfirmImport(){
     mdImp.items.forEach(it=>{
       const sectorRec=DB.sectors.find(s=>xh(s.name)===xh(it.sector));
       const existing=DB.items.find(x=>x.code===it.code);
-      if(existing){existing.name=it.name||existing.name;existing.sector=sectorRec?sectorRec.code:existing.sector;itemsUpd++;}
-      else{DB.items.push({code:it.code,name:it.name||'',unit:'',sector:sectorRec?sectorRec.code:'',needsCounter:false});itemsNew++;}
+      const w=it.weight?(+it.weight||0):0;
+      if(existing){
+        existing.name=it.name||existing.name;
+        existing.sector=sectorRec?sectorRec.code:existing.sector;
+        if(w)existing.weight=w;
+        if(it.storageTemp)existing.storageTemp=it.storageTemp;
+        itemsUpd++;
+      }
+      else{DB.items.push({code:it.code,name:it.name||'',unit:'',sector:sectorRec?sectorRec.code:'',needsCounter:false,weight:w,storageTemp:it.storageTemp||''});itemsNew++;}
     });
     mdImp.customers.forEach(c=>{
       const existing=DB.customers.find(x=>x.code===c.code);
@@ -1952,7 +1969,7 @@ function rMasterDataImport(){
     <div style="background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--blue2);font-weight:700;line-height:1.9;">
       ℹ️ ملف واحد ممكن يحتوي على أي عدد من الأقسام دي (حسب عناوين الأعمدة في أول صف — أضف بس الأعمدة اللي محتاجها):<br>
       🧍 السائقين/المناديب: Driv. ID / Driver Name / Phone<br>
-      📦 الأصناف: كود الصنف / اسم الصنف / القطاع<br>
+      📦 الأصناف: كود الصنف / اسم الصنف / القطاع / الوزن (اختياري) / درجة حفظ التخزين (اختياري، مثال: 2:8)<br>
       🏢 العملاء: Name / Customer account<br>
       🧪 المعامل: كود المعمل / اسم المعمل / كود عميل المعمل<br>
       🚗 أرقام السيارات: رقم السيارة<br>
@@ -1978,8 +1995,8 @@ function rMasterDataImport(){
     </table></div>
     <div class="slabel" style="margin-top:14px;">📦 الأصناف (${mdImp.items.length})</div>
     <div style="overflow-x:auto;"><table class="rep" style="font-size:11px;">
-      <thead><tr><th>الكود</th><th>الاسم</th><th>القطاع</th></tr></thead>
-      <tbody>${itPg.rows.map(i=>`<tr><td>${i.code}</td><td>${i.name}</td><td>${i.sector||'-'}</td></tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--muted);">لا يوجد</td></tr>'}</tbody>
+      <thead><tr><th>الكود</th><th>الاسم</th><th>القطاع</th><th>الوزن</th><th>درجة الحفظ</th></tr></thead>
+      <tbody>${itPg.rows.map(i=>`<tr><td>${i.code}</td><td>${i.name}</td><td>${i.sector||'-'}</td><td>${i.weight||'-'}</td><td>${i.storageTemp||'-'}</td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--muted);">لا يوجد</td></tr>'}</tbody>
     </table></div>
     ${loadMoreBtn('mdItemPreview',itPg)}
     <div class="slabel" style="margin-top:14px;">🏢 العملاء (${mdImp.customers.length})</div>
@@ -3201,6 +3218,10 @@ function rManifest(rn){
     myOrds.forEach((o,i)=>{stopNo[o.id]=i+1;});
   }
 
+  // إجمالي الوزن التقديري ومنتجات التبريد (تُحفظ من:إلى) الموجودة في هذا الإذن المجمع
+  const totalWeight=myOrds.reduce((s,o)=>s+itemW(o.icode)*(+o.qty||0),0);
+  const coldTemps=[...new Set(myOrds.map(o=>itemStorage(o.icode)).filter(Boolean))];
+
   return `<div class="manifest-outer">
     <div class="manifest-bar no-print" style="flex-wrap:wrap;">
       ${dateChip('mfDate',S.repCalDate||ymd(Date.now()),S.repCalAll)}
@@ -3213,13 +3234,17 @@ function rManifest(rn){
     ${routeOn&&totalStops>1?`<div class="no-print" style="max-width:1400px;margin:0 auto 10px;background:var(--blue-lg);border:1px solid var(--blue2);border-radius:9px;padding:9px 14px;font-size:11.5px;color:var(--blue2);font-weight:700;">
       🧭 تم ترتيب ${totalStops} محطة حسب أقرب مسافة${locatedStops<totalStops?` — ${locatedStops} منهم بموقع محفوظ (الباقي ${totalStops-locatedStops} بدون موقع اتحطوا آخر الترتيب)`:''}${totalKm>0?` — إجمالي مسافة الجولة التقديرية: <b>${totalKm.toFixed(1)} كم</b>`:''}
     </div>`:''}
+    ${(totalWeight>0||coldTemps.length)?`<div class="no-print" style="max-width:1400px;margin:0 auto 10px;background:${coldTemps.length?'var(--bad-bg)':'var(--blue-lg)'};border:1px solid ${coldTemps.length?'var(--bad)':'var(--blue2)'};border-radius:9px;padding:9px 14px;font-size:11.5px;color:${coldTemps.length?'var(--bad)':'var(--blue2)'};font-weight:700;line-height:1.9;">
+      ${totalWeight>0?`⚖️ إجمالي الوزن التقديري لهذا الإذن المجمع: <b>${(Math.round(totalWeight*100)/100)} كجم</b>`:''}
+      ${coldTemps.length?`<br>🌡️ تنبيه: يوجد بضاعة ${coldTemps.map(t=>fmtStorageTemp(t)).join(' / ')} — لازم تتنقل وتتخزن بعربية/تبريد مناسبة`:''}
+    </div>`:''}
     <div class="mpaper">
       <div class="mhead">
         <div class="mh-l">
           <img src="${LOGO}" alt="IFT">
           <div><h2>كشف تحرك مندوب</h2><div class="mh-sub">IFT CORPORATION — بضاعة الأمانة</div></div>
         </div>
-        <div class="mh-r">تاريخ الطباعة: ${now.toLocaleDateString('ar-EG')}<br>عدد الأوردرات: ${myOrds.length}${S.repCalAll?'':' — ليوم '+schedDateLabel(S.repCalDate||ymd(Date.now()))}${routeOn&&totalKm>0?'<br>مسافة الجولة التقديرية: '+totalKm.toFixed(1)+' كم':''}</div>
+        <div class="mh-r">تاريخ الطباعة: ${now.toLocaleDateString('ar-EG')}<br>عدد الأوردرات: ${myOrds.length}${S.repCalAll?'':' — ليوم '+schedDateLabel(S.repCalDate||ymd(Date.now()))}${routeOn&&totalKm>0?'<br>مسافة الجولة التقديرية: '+totalKm.toFixed(1)+' كم':''}${totalWeight>0?'<br>إجمالي الوزن التقديري: '+(Math.round(totalWeight*100)/100)+' كجم':''}${coldTemps.length?'<br>⚠️ يحتوي على بضاعة '+coldTemps.map(t=>fmtStorageTemp(t)).join(' / '):''}</div>
       </div>
       <div class="mdrv">
         <div class="mdrv-card">
@@ -4159,10 +4184,35 @@ function rAdmItems(){return`
       <div class="row2"><div class="field"><label>الوحدة</label><input name="unit" placeholder="علبة / كيس / أمبول ..."></div>
         <div class="field"><label>القطاع</label><select name="sector" required>${DB.sectors.length?DB.sectors.map(s=>`<option value="${s.code}">${s.name}</option>`).join(''):'<option value="">أضف قطاعاً أولاً</option>'}</select></div>
       </div>
+      <div class="row2"><div class="field"><label>⚖️ وزن الوحدة (كجم)</label><input name="weight" type="number" step="0.001" min="0" placeholder="مثال: 0.5"></div>
+        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label><input name="storageTemp" placeholder="مثال: 2:8"></div>
+      </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--blue2);margin:4px 0 12px;"><input type="checkbox" name="needsCounter" style="width:16px;height:16px;"> 🎫 هذا الصنف يحتاج كونتر (نيتروجين) عند الصرف/التحويل</label>
       <button class="btn-primary" type="submit">إضافة</button></form>
     <div class="slabel">الأصناف (${DB.items.length})</div>
-    ${DB.items.map(i=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${i.code}${i.sector?' · '+sname(i.sector):''}</span><b>${i.name} ${i.unit?'('+i.unit+')':''}</b></div>`).join('')}`;
+    ${DB.items.map(i=>{
+      const editing=S.editItem===i.code;
+      return`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;flex-direction:column;align-items:stretch;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span>${i.code}${i.sector?' · '+sname(i.sector):''}${i.weight?` · ⚖️ ${i.weight} كجم`:''}${i.storageTemp?` · 🌡️ ${fmtStorageTemp(i.storageTemp)}`:''}</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <b>${i.name} ${i.unit?'('+i.unit+')':''}</b>
+          <span style="cursor:pointer;font-size:15px;" data-a="edititem" data-code="${i.code}">${editing?'✕':'✏️'}</span>
+        </div>
+      </div>
+      ${editing?`<form id="eif" data-code="${i.code}" style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;">
+        <div class="row2"><div class="field"><label>الاسم</label><input name="name" value="${i.name||''}" required></div><div class="field"><label>الوحدة</label><input name="unit" value="${i.unit||''}"></div></div>
+        <div class="row2"><div class="field"><label>القطاع</label><select name="sector">${DB.sectors.map(s=>`<option value="${s.code}" ${i.sector===s.code?'selected':''}>${s.name}</option>`).join('')}</select></div>
+          <div class="field"><label>⚖️ وزن الوحدة (كجم)</label><input name="weight" type="number" step="0.001" min="0" value="${i.weight||''}"></div>
+        </div>
+        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label><input name="storageTemp" value="${i.storageTemp||''}" placeholder="مثال: 2:8"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--blue2);margin:4px 0 12px;"><input type="checkbox" name="needsCounter" ${i.needsCounter?'checked':''} style="width:16px;height:16px;"> 🎫 يحتاج كونتر (نيتروجين)</label>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-primary" type="submit" style="flex:1;">💾 حفظ التعديلات</button>
+          <button class="bs bghost" type="button" data-a="edititem" data-code="${i.code}" style="flex:0 0 auto;">إلغاء</button>
+        </div>
+      </form>`:''}
+      </div>`;}).join('')}`;
 }
 function rAdmLabs(){return`
     <div class="slabel">🏭 إضافة معمل (معمل تابع لعميل)</div>
@@ -4616,7 +4666,7 @@ function bind(){
       }
     });
   };
-  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);f('acarf',onACar);f('euf',onEU);
+  f('sif',onSI);f('nf',onNew);f('trf',onTrf);f('carf',onCars);f('auf',onAU);f('acf',onAC);f('aif',onAI);f('eif',onEI);f('asf',onAS);f('alf',onAL);f('acnf',onACN);f('cnsf',onConsume);f('n2f',onN2Fill);f('acarf',onACar);f('euf',onEU);
   f('editorderf',onEditOrderSubmit);f('editrepf',onEditRepSubmit);f('editbatchf',onEditBatchSubmit);
   const rnSelEl=document.getElementById('rnSel');
   if(rnSelEl)rnSelEl.addEventListener('change',()=>{const ot=document.getElementById('rnOther');if(ot)ot.style.display=rnSelEl.value==='__other__'?'block':'none';});
@@ -4889,7 +4939,7 @@ function onA(e){
 function onAInner(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen','consaddunit','consrmunit','consdiscard','restorecancel']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','edititem','admtab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen','consaddunit','consrmunit','consdiscard','restorecancel']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
@@ -4981,6 +5031,7 @@ function onAInner(e){
   else if(a==='edituser'){S.editUn=(S.editUn===el.dataset.un)?null:el.dataset.un;render();}
   else if(a==='repgrp'){S.repGrp=el.dataset.g;render();}
   else if(a==='editlab'){S.editLab=(S.editLab===el.dataset.code)?null:el.dataset.code;render();}
+  else if(a==='edititem'){S.editItem=(S.editItem===el.dataset.code)?null:el.dataset.code;render();}
   else if(a==='labaddcust'){addCustToLab(el.dataset.code);}
   else if(a==='labrmcust'){rmCustFromLab(el.dataset.code,el.dataset.cust);}
   else if(a==='xls'){doXLS();}
@@ -5477,7 +5528,25 @@ async function onAC(e){
 async function onAI(e){
   e.preventDefault();const f=new FormData(e.target);const code=f.get('code').trim();
   if(DB.items.some(i=>i.code===code)){toast('الكود مستخدم');return;}
-  DB.items.push({code,name:f.get('name'),unit:f.get('unit')||'',sector:f.get('sector')||'',needsCounter:!!f.get('needsCounter')});await svi();toast('تم إضافة الصنف');e.target.reset();render();
+  const weight=(f.get('weight')||'').trim(),storageTemp=(f.get('storageTemp')||'').trim();
+  DB.items.push({code,name:f.get('name'),unit:f.get('unit')||'',sector:f.get('sector')||'',needsCounter:!!f.get('needsCounter'),weight:weight?+weight:0,storageTemp});await svi();toast('تم إضافة الصنف');e.target.reset();render();
+}
+async function onEI(e){
+  e.preventDefault();
+  const code=e.target.dataset.code;
+  const it=DB.items.find(x=>x.code===code);if(!it)return;
+  const f=new FormData(e.target);
+  const weight=(f.get('weight')||'').trim();
+  it.name=(f.get('name')||'').trim()||it.name;
+  it.unit=(f.get('unit')||'').trim();
+  it.sector=f.get('sector')||it.sector;
+  it.needsCounter=!!f.get('needsCounter');
+  it.weight=weight?+weight:0;
+  it.storageTemp=(f.get('storageTemp')||'').trim();
+  await svi();
+  S.editItem=null;
+  toast('✅ تم حفظ تعديلات الصنف');
+  render();
 }
 
 async function onAS(e){
