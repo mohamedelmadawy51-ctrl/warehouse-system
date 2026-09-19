@@ -1491,7 +1491,7 @@ function sidxWd(o){return {draft:0,pending_accounts:1,rejected:1,pending_cars:2,
 function sidxRet(o){return {return_pending_rep:1,return_pending_acc:2,return_pending_wh:3,returned:4}[o.stage]??0;}
 function sidxCret(o){return {customer_return_pending_acc:1,customer_return_pending_cars:2,customer_return_pending_wh:3,customer_returned:4}[o.stage]??0;}
 
-let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:'',consUnits:[],consPlan:null,restorePending:null};
+let S={screen:'welcome',tab:'home',user:null,oid:null,ntype:'addition',wtype:'amanah',rng:'today',err:'',toast:'',hflt:null,hfltLabel:'',bsrch:'',hsrch:'',anim:null,notifOpen:false,calDate:ymd(Date.now()),calAll:false,printRep:null,editUn:null,repGrp:'overview',editLab:null,repCalDate:ymd(Date.now()),repCalAll:true,repSearch:'',repBoxOpen:null,pageShow:{},balDetailCust:null,editView:'order',editSelOid:null,editBatchKey:null,editRepSel:null,editOrderSearch:'',consUnits:[],consPlan:null,restorePending:null,admTab:'users'};
 
 // ===== أدوات التاريخ الخاصة بالكالندر =====
 function ymd(d){const dt=new Date(d);const y=dt.getFullYear(),m=String(dt.getMonth()+1).padStart(2,'0'),day=String(dt.getDate()).padStart(2,'0');return`${y}-${m}-${day}`;}
@@ -4054,9 +4054,36 @@ function rCntLog(){
     <button class="bs bghost" style="width:100%;margin-top:6px;" data-a="tab" data-tab="adm">⟵ رجوع للإدارة</button>
   </div>`;}
 
-function rAdm(){return`
+const ADM_TABS=[
+  {k:'users',l:'👤 مستخدمون'},
+  {k:'customers',l:'🏢 عملاء'},
+  {k:'sectors',l:'🗂️ قطاعات'},
+  {k:'items',l:'📦 أصناف'},
+  {k:'labs',l:'🧪 معامل'},
+  {k:'counters',l:'🎫 كونترات'},
+  {k:'cars',l:'🚗 سيارات'},
+  {k:'import',l:'📥 استيراد'},
+];
+function rAdm(){
+  const t=S.admTab||'users';
+  const body=(
+    t==='users'?rAdmUsers():
+    t==='customers'?rAdmCustomers():
+    t==='sectors'?rAdmSectors():
+    t==='items'?rAdmItems():
+    t==='labs'?rAdmLabs():
+    t==='counters'?rAdmCounters():
+    t==='cars'?rAdmCars():
+    t==='import'?rAdmImport():''
+  );
+  return`
   <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف · سيارات</div>
   <div class="content">
+    <div class="pillbar">${ADM_TABS.map(x=>`<button type="button" data-a="admtab" data-t="${x.k}" class="${t===x.k?'on':''}">${x.l}</button>`).join('')}</div>
+    ${body}
+  </div>`;
+}
+function rAdmUsers(){return`
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
       <div style="font-weight:800;margin-bottom:6px;">🔗 كيف يدخل زملاؤك على البرنامج؟</div>
       <div style="font-size:12px;line-height:2;color:var(--blue2);">
@@ -4065,10 +4092,6 @@ function rAdm(){return`
         3. أنشئ له حساب من الأسفل بيوزر وباسورد ودور.<br>
         4. <b>مهم:</b> الكل يفتح <b>نفس الرابط</b> لمشاركة نفس البيانات.
       </div>
-    </div>
-    <div class="slabel">📥 استيراد بيانات أساسية (أصناف / عملاء / سائقين)</div>
-    <div class="card">
-      ${rMasterDataImport()}
     </div>
     <div class="slabel">إضافة مستخدم</div>
     <form id="auf">
@@ -4116,15 +4139,21 @@ function rAdm(){return`
             <button class="bs bghost" type="button" data-a="edituser" data-un="${u.username}" style="flex:0 0 auto;">إلغاء</button>
           </div>
         </form>`:''}
-      </div>`;}).join('')}
-    <div class="slabel">إضافة عميل / معمل</div>
+      </div>`;}).join('')}`;
+}
+function rAdmCustomers(){return`
+    <div class="slabel">إضافة عميل</div>
     <form id="acf"><div class="row2"><div class="field"><label>الكود</label><input name="code" required></div><div class="field"><label>الاسم</label><input name="name" required></div></div><button class="btn-primary" type="submit">إضافة</button></form>
     <div class="slabel">العملاء (${DB.customers.length})</div>
-    ${DB.customers.map(c=>{const locs=custLocationsFor(c.code);return`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${c.code}${locs.length?` · <span style="color:var(--blue2);font-weight:700;">📍 ${locs.length} موقع تسليم محفوظ</span>`:''}</span><b>${c.name}</b></div>`;}).join('')}
+    ${DB.customers.map(c=>{const locs=custLocationsFor(c.code);return`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${c.code}${locs.length?` · <span style="color:var(--blue2);font-weight:700;">📍 ${locs.length} موقع تسليم محفوظ</span>`:''}</span><b>${c.name}</b></div>`;}).join('')}`;
+}
+function rAdmSectors(){return`
     <div class="slabel">إضافة قطاع</div>
     <form id="asf"><div class="row2"><div class="field"><label>الكود</label><input name="code" required></div><div class="field"><label>اسم القطاع</label><input name="name" placeholder="بيطري / بشري / أعلاف ..." required></div></div><button class="btn-primary" type="submit">إضافة القطاع</button></form>
     <div class="slabel">القطاعات (${DB.sectors.length})</div>
-    ${DB.sectors.map(s=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${s.code}</span><b>${s.name}</b></div>`).join('')}
+    ${DB.sectors.map(s=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${s.code}</span><b>${s.name}</b></div>`).join('')}`;
+}
+function rAdmItems(){return`
     <div class="slabel">إضافة صنف</div>
     <form id="aif"><div class="row2"><div class="field"><label>الكود</label><input name="code" required></div><div class="field"><label>الاسم</label><input name="name" required></div></div>
       <div class="row2"><div class="field"><label>الوحدة</label><input name="unit" placeholder="علبة / كيس / أمبول ..."></div>
@@ -4133,9 +4162,10 @@ function rAdm(){return`
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--blue2);margin:4px 0 12px;"><input type="checkbox" name="needsCounter" style="width:16px;height:16px;"> 🎫 هذا الصنف يحتاج كونتر (نيتروجين) عند الصرف/التحويل</label>
       <button class="btn-primary" type="submit">إضافة</button></form>
     <div class="slabel">الأصناف (${DB.items.length})</div>
-    ${DB.items.map(i=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${i.code}${i.sector?' · '+sname(i.sector):''}</span><b>${i.name} ${i.unit?'('+i.unit+')':''}</b></div>`).join('')}
-    <div class="slabel">إضافة معمل (معمل تابع لعميل)</div>
-    <div class="slabel">🏭 إضافة معمل</div>
+    ${DB.items.map(i=>`<div class="kv" style="background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:5px;"><span>${i.code}${i.sector?' · '+sname(i.sector):''}</span><b>${i.name} ${i.unit?'('+i.unit+')':''}</b></div>`).join('')}`;
+}
+function rAdmLabs(){return`
+    <div class="slabel">🏭 إضافة معمل (معمل تابع لعميل)</div>
     <form id="alf">
       <div class="row2"><div class="field"><label>كود المعمل</label><input name="code" required></div><div class="field"><label>اسم المعمل</label><input name="name" required></div></div>
       <div class="field"><label>العملاء المرتبطين بالمعمل (المعمل ممكن يستقبل ويحفظ لأكتر من عميل)</label>
@@ -4161,7 +4191,9 @@ function rAdm(){return`
           </div>`:''}
           ${codes.length?`<div style="display:flex;gap:6px;flex-wrap:wrap;">${codes.map(cc=>`<button type="button" class="bs bghost" style="font-size:10px;padding:4px 9px;" data-a="labrmcust" data-code="${l.code}" data-cust="${cc}">✕ إزالة ${fc(cc)?.name||cc}</button>`).join('')}</div>`:''}
         </div>`:''}
-      </div>`;}).join('')}
+      </div>`;}).join('')}`;
+}
+function rAdmCounters(){return`
     <div class="slabel">إضافة رقم كونتر / دور</div>
     <form id="acnf">
       <div class="row2"><div class="field"><label>رقم الكونتر</label><input name="code" placeholder="مثال: 12" required></div><div class="field"><label>وصف (اختياري)</label><input name="name" placeholder="مثال: دور الصباح"></div></div>
@@ -4184,7 +4216,9 @@ function rAdm(){return`
       <div class="cntcard-row muted"><span>المسؤول</span><span>👤 ${u2n(c.owner)||'بدون مسؤول'}</span></div>
     </div>`;}).join('')}
     <div class="slabel">تعديل سعة كونتر (مدير النظام فقط)</div>
-    <button class="bs bghost" style="width:100%;" data-a="editcap" type="button">✏️ تعديل سعة كونتر موجود</button>
+    <button class="bs bghost" style="width:100%;" data-a="editcap" type="button">✏️ تعديل سعة كونتر موجود</button>`;
+}
+function rAdmCars(){return`
     <div class="slabel">🚗 إضافة سيارة</div>
     <form id="acarf">
       <div class="field"><label>رقم العربية</label><input name="carNo" placeholder="مثال: أ ب ج 1234" required></div>
@@ -4199,8 +4233,14 @@ function rAdm(){return`
         ${c.photo?`<img src="${c.photo}" style="width:38px;height:38px;border-radius:8px;object-fit:cover;border:1px solid var(--line);">`:''}
         🚗 ${c.carNo}
       </span>
-    </div>`).join(''):`<div style="font-size:11.5px;color:var(--muted);">لا توجد سيارات مسجّلة بعد</div>`}
-  </div>`;}
+    </div>`).join(''):`<div style="font-size:11.5px;color:var(--muted);">لا توجد سيارات مسجّلة بعد</div>`}`;
+}
+function rAdmImport(){return`
+    <div class="slabel">📥 استيراد بيانات أساسية (أصناف / عملاء / سائقين / معامل / سيارات / موظفين)</div>
+    <div class="card">
+      ${rMasterDataImport()}
+    </div>`;
+}
 
 /* ===== شاشة تعديلات الأوردرات / المندوب / الإذن المجمع بالكامل (بعد سحب الشيت) ===== */
 function rEdits(){
@@ -4874,6 +4914,7 @@ function onAInner(e){
   else if(a==='cntlog'){S.cntLogCode=el.dataset.cnt;S.tab='cntlog';render();}
   else if(a==='qc'){doQC(id);}
   else if(a==='logout'){stopAmbient();S.user=null;S.screen='welcome';S.tab='home';S.hflt=null;render();}
+  else if(a==='admtab'){S.admTab=el.dataset.t;render();}
   else if(a==='tab'){S.tab=el.dataset.tab;S.oid=null;S.hflt=null;pendAtt=null;pendDlvAtt=null;xlsImp=null;S.balDetailCust=null;render();}
   else if(a==='stype'){S.ntype=el.dataset.type;pendAtt=null;if(el.dataset.type!=='excel_import')xlsImp=null;render();}
   else if(a==='xls-continue'){xlsContinueToPreview();}
