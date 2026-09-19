@@ -11,6 +11,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <style>
 :root{
   --blue:#0B2E5C;--blue2:#1651A6;--blue-lg:#E8F0FE;
@@ -570,6 +571,21 @@ function unseenEditsForAdmin(){
   return(DB.editLog||[]).filter(x=>(x.at||0)>seenAt&&x.byUser!==u.username).sort((a,b)=>(b.at||0)-(a.at||0));
 }
 function sname(code){const s=DB.sectors.find(x=>x.code===code);return s?s.name:'';}
+// خيارات درجات حفظ التخزين الشائعة (تُعرض كلها جنب بعض في قائمة منسدلة بدل الكتابة الحرة في كل مرة)
+const STORAGE_TEMP_OPTIONS=[
+  {v:'',l:'بدون تحديد'},
+  {v:'يُحفظ بالثلاجة (2° إلى 8°م)',l:'🧊 يُحفظ بالثلاجة (2° إلى 8°م)'},
+  {v:'يُحفظ بالفريزر (-15° إلى -25°م)',l:'❄️ يُحفظ بالفريزر (-15° إلى -25°م)'},
+  {v:'يُحفظ في درجة حرارة الغرفة (15° إلى 25°م)',l:'🌡️ يُحفظ في درجة حرارة الغرفة (15° إلى 25°م)'},
+  {v:'يُحفظ بعيدًا عن الضوء - لا يزيد عن 30°م',l:'☀️ يُحفظ بعيدًا عن الضوء - لا يزيد عن 30°م'},
+];
+function stFieldHtml(selId,otherId,current){
+  const known=STORAGE_TEMP_OPTIONS.some(o=>o.v===current);
+  const selVal=current?(known?current:'__other__'):'';
+  const opts=STORAGE_TEMP_OPTIONS.map(o=>`<option value="${o.v}" ${selVal===o.v?'selected':''}>${o.l}</option>`).join('')+`<option value="__other__" ${selVal==='__other__'?'selected':''}>✏️ أخرى (اكتب يدويًا)</option>`;
+  return `<select name="storageTemp" id="${selId}">${opts}</select>
+    <input type="text" name="storageTempOther" id="${otherId}" placeholder="اكتب نص حر، مثال: 2:8" value="${known?'':(current||'')}" style="margin-top:6px;display:${selVal==='__other__'?'block':'none'};">`;
+}
 function fmtStorageTemp(t){
   if(!t)return'';
   const m=String(t).trim().match(/^(-?\d+(?:\.\d+)?)\s*[:\-–]\s*(-?\d+(?:\.\d+)?)$/);
@@ -2239,7 +2255,38 @@ async function init(){
   dbReady=true;
   if(IS_CONFIGURED && !dbLoadError){startRealTimeSync();}
   if(window.__refreshSyncBadge)window.__refreshSyncBadge();
+  applyPublicManifestLinkIfAny(); // لو الرابط ده جاي من مسح كود QR لإذن مجمع، نفتحه على طول من غير تسجيل دخول
   if(S.screen==='signin')render(); // لو كانت شاشة الدخول متفتحة وقت اكتمال التحميل، نحدّثها
+}
+// لو الرابط فيه ?pubmf=1&rep=...&date=... (جاي من مسح كود QR أسفل إذن مجمع)، نفتح شاشة الإذن المجمع دي مباشرة
+// بدون الحاجة لتسجيل دخول — نفس المستوى الحالي لحماية البيانات في التطبيق (قاعدة البيانات بالفعل مقروءة بحرية من أي حد معاه الرابط)
+function applyPublicManifestLinkIfAny(){
+  try{
+    const qs=new URLSearchParams(location.search);
+    if(qs.get('pubmf')!=='1')return;
+    const rep=qs.get('rep');
+    if(!rep)return;
+    const date=qs.get('date')||'all';
+    S.printRep=rep;
+    if(date==='all'){S.repCalAll=true;}
+    else{S.repCalAll=false;S.repCalDate=date;}
+    render();
+  }catch(e){/* رابط غير سليم — نتجاهله ونكمل تشغيل التطبيق عادي */}
+}
+// إنشاء كود QR (SVG) لرابط عام يفتح نفس الإذن المجمع مباشرة — يُستخدم أسفل الإذن المجمع عند الطباعة/PDF
+function manifestShareUrl(rn){
+  const base=location.origin+location.pathname;
+  const date=S.repCalAll?'all':(S.repCalDate||ymd(Date.now()));
+  return `${base}?pubmf=1&rep=${encodeURIComponent(rn)}&date=${encodeURIComponent(date)}`;
+}
+function buildQRSvg(text){
+  try{
+    if(typeof qrcode==='undefined')return '';
+    const qr=qrcode(0,'M');
+    qr.addData(text);
+    qr.make();
+    return qr.createSvgTag({cellSize:4,margin:2,scalable:true});
+  }catch(e){return '';}
 }
 async function retryLoadUsers(){
   dbReady=false;render();
@@ -3280,6 +3327,10 @@ function rManifest(rn){
         <div class="sigbox"><div class="sigline">توقيع المندوب</div></div>
         <div class="sigbox"><div class="sigline">توقيع المسؤول</div></div>
       </div>
+      <div class="mqr" style="text-align:center;margin-top:18px;padding-top:14px;border-top:1px dashed var(--line);">
+        <div style="display:inline-block;width:104px;">${buildQRSvg(manifestShareUrl(rn))}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:6px;">📱 امسح الكود بالموبايل لعرض/حفظ نسخة PDF كاملة من هذا الإذن المجمع في أي وقت</div>
+      </div>
     </div>
   </div>`;
 }
@@ -4185,7 +4236,7 @@ function rAdmItems(){return`
         <div class="field"><label>القطاع</label><select name="sector" required>${DB.sectors.length?DB.sectors.map(s=>`<option value="${s.code}">${s.name}</option>`).join(''):'<option value="">أضف قطاعاً أولاً</option>'}</select></div>
       </div>
       <div class="row2"><div class="field"><label>⚖️ وزن الوحدة (كجم)</label><input name="weight" type="number" step="0.001" min="0" placeholder="مثال: 0.5"></div>
-        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label><input name="storageTemp" placeholder="مثال: 2:8"></div>
+        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label>${stFieldHtml('aiStorageSel','aiStorageOther','')}</div>
       </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--blue2);margin:4px 0 12px;"><input type="checkbox" name="needsCounter" style="width:16px;height:16px;"> 🎫 هذا الصنف يحتاج كونتر (نيتروجين) عند الصرف/التحويل</label>
       <button class="btn-primary" type="submit">إضافة</button></form>
@@ -4205,7 +4256,7 @@ function rAdmItems(){return`
         <div class="row2"><div class="field"><label>القطاع</label><select name="sector">${DB.sectors.map(s=>`<option value="${s.code}" ${i.sector===s.code?'selected':''}>${s.name}</option>`).join('')}</select></div>
           <div class="field"><label>⚖️ وزن الوحدة (كجم)</label><input name="weight" type="number" step="0.001" min="0" value="${i.weight||''}"></div>
         </div>
-        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label><input name="storageTemp" value="${i.storageTemp||''}" placeholder="مثال: 2:8"></div>
+        <div class="field"><label>🌡️ درجة حفظ التخزين (اختياري)</label>${stFieldHtml('eiStorageSel','eiStorageOther',i.storageTemp||'')}</div>
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--blue2);margin:4px 0 12px;"><input type="checkbox" name="needsCounter" ${i.needsCounter?'checked':''} style="width:16px;height:16px;"> 🎫 يحتاج كونتر (نيتروجين)</label>
         <div style="display:flex;gap:8px;">
           <button class="btn-primary" type="submit" style="flex:1;">💾 حفظ التعديلات</button>
@@ -4672,6 +4723,10 @@ function bind(){
   if(rnSelEl)rnSelEl.addEventListener('change',()=>{const ot=document.getElementById('rnOther');if(ot)ot.style.display=rnSelEl.value==='__other__'?'block':'none';});
   const cnSelEl=document.getElementById('cnSel');
   if(cnSelEl)cnSelEl.addEventListener('change',()=>{const ot=document.getElementById('cnOther');if(ot)ot.style.display=cnSelEl.value==='__other__'?'block':'none';});
+  const aiStorageSelEl=document.getElementById('aiStorageSel');
+  if(aiStorageSelEl)aiStorageSelEl.addEventListener('change',()=>{const ot=document.getElementById('aiStorageOther');if(ot)ot.style.display=aiStorageSelEl.value==='__other__'?'block':'none';});
+  const eiStorageSelEl=document.getElementById('eiStorageSel');
+  if(eiStorageSelEl)eiStorageSelEl.addEventListener('change',()=>{const ot=document.getElementById('eiStorageOther');if(ot)ot.style.display=eiStorageSelEl.value==='__other__'?'block':'none';});
   // إظهار/إخفاء حقل "اسم/رقم آخر" لكل نموذج من نماذج شاشة التعديلات (أوردر منفرد / نقل مندوب / إذن مجمع)
   [['eoRnSel','eoRnOther'],['eoCnSel','eoCnOther'],['erRnSel','erRnOther'],['erCnSel','erCnOther'],['ebRnSel','ebRnOther'],['ebCnSel','ebCnOther']].forEach(([selId,othId])=>{
     const selEl=document.getElementById(selId);
@@ -5528,7 +5583,9 @@ async function onAC(e){
 async function onAI(e){
   e.preventDefault();const f=new FormData(e.target);const code=f.get('code').trim();
   if(DB.items.some(i=>i.code===code)){toast('الكود مستخدم');return;}
-  const weight=(f.get('weight')||'').trim(),storageTemp=(f.get('storageTemp')||'').trim();
+  const weight=(f.get('weight')||'').trim();
+  let storageTemp=(f.get('storageTemp')||'').trim();
+  if(storageTemp==='__other__')storageTemp=(f.get('storageTempOther')||'').trim();
   DB.items.push({code,name:f.get('name'),unit:f.get('unit')||'',sector:f.get('sector')||'',needsCounter:!!f.get('needsCounter'),weight:weight?+weight:0,storageTemp});await svi();toast('تم إضافة الصنف');e.target.reset();render();
 }
 async function onEI(e){
@@ -5537,12 +5594,14 @@ async function onEI(e){
   const it=DB.items.find(x=>x.code===code);if(!it)return;
   const f=new FormData(e.target);
   const weight=(f.get('weight')||'').trim();
+  let storageTemp=(f.get('storageTemp')||'').trim();
+  if(storageTemp==='__other__')storageTemp=(f.get('storageTempOther')||'').trim();
   it.name=(f.get('name')||'').trim()||it.name;
   it.unit=(f.get('unit')||'').trim();
   it.sector=f.get('sector')||it.sector;
   it.needsCounter=!!f.get('needsCounter');
   it.weight=weight?+weight:0;
-  it.storageTemp=(f.get('storageTemp')||'').trim();
+  it.storageTemp=storageTemp;
   await svi();
   S.editItem=null;
   toast('✅ تم حفظ تعديلات الصنف');
