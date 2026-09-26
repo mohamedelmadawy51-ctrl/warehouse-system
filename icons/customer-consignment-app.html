@@ -210,6 +210,11 @@ table.rep th{color:var(--muted);font-weight:800;font-size:10px;background:var(--
 .sw::after{content:'';position:absolute;top:3px;right:3px;width:17px;height:17px;border-radius:50%;background:#fff;transition:right .15s;}
 .sw.on::after{right:20px;}
 .attachbtn{display:flex;align-items:center;gap:8px;background:var(--blue-lg);border:1.5px dashed var(--blue2);border-radius:10px;padding:11px 14px;cursor:pointer;font-size:12.5px;font-weight:700;color:var(--blue2);margin-bottom:13px;width:100%;}
+.permgrid{background:#fbfbfd;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px;}
+.chkgrid{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;}
+.chkitem{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--blue);cursor:pointer;padding:3px 0;}
+.chkitem input{width:15px;height:15px;flex-shrink:0;accent-color:var(--blue2);cursor:pointer;}
+@media(max-width:480px){.chkgrid{grid-template-columns:1fr;}}
 .attachprev{background:var(--ok-bg);border:1px solid var(--ok);border-radius:10px;padding:9px 12px;margin-bottom:13px;font-size:12px;color:var(--ok);font-weight:700;}
 .ew{color:var(--warn);font-weight:800;}
 .eb{color:var(--bad);font-weight:800;}
@@ -1156,7 +1161,7 @@ function buildBackupObject(){
 }
 // إنشاء وتنزيل نسخة احتياطية كاملة — بيحاول أول حاجة يسأل المستخدم "يحفظ فين" (لو المتصفح بيدعم ده)، ولو مش مدعوم بينزّل الملف عادي لمجلد التنزيلات
 async function doBackup(){
-  if(!S.user||S.user.role!=='admin')return;
+  if(!S.user||!can(S.user,'backup_restore'))return;
   try{
     const backup=buildBackupObject();
     const json=JSON.stringify(backup,null,2);
@@ -1214,7 +1219,7 @@ async function onRestoreFile(e){
 }
 // تنفيذ الاسترداد الفعلي بعد تأكيد المدير — استبدال كل بيانات النظام بمحتوى النسخة المرفوعة وحفظها فورًا
 async function doRestoreConfirm(){
-  if(!S.user||S.user.role!=='admin'||!S.restorePending)return;
+  if(!S.user||!can(S.user,'backup_restore')||!S.restorePending)return;
   const inp=document.getElementById('restoreConfirmText');
   const val=inp?inp.value.trim():'';
   if(val!=='استرداد'){toast('⛔ اكتب كلمة "استرداد" بالظبط في المربع للتأكيد قبل التنفيذ');return;}
@@ -1561,6 +1566,97 @@ function reverseFefoTail(chunks,retQty){
 }
 
 const RLBL={admin:'مدير النظام',data_entry:'مدخل بيانات',accounts:'حسابات العملاء',cars:'السيارات',warehouse:'المخازن',rep:'مندوب توزيع',quality:'إدارة الجودة'};
+
+/* ============================================================
+   نظام الصلاحيات التفصيلية — Check Box لكل مرحلة (Cycle) ولكل عملية داخل كل موديول، بدل الاعتماد على دور ثابت فقط
+   ============================================================
+   كل مستخدم له "دور أساسي" (role) بيُستخدم كقالب افتراضي عند إنشاء الحساب ولبعض أمور الهوية (زي مطابقة أوردرات
+   المندوب باسمه، أو القطاع الافتراضي لمدخل البيانات/الحسابات). أما الصلاحيات الفعلية فمخزّنة صراحةً وبشكل مستقل
+   في u.permissions{capKey:true/false} — فيقدر المدير يفعّل/يمنع أي عملية أو مرحلة لأي شخص بغض النظر عن دوره،
+   فمثلاً حد "دوره الأساسي" مندوب ممكن يتاح له كمان صلاحية "تحديد المندوب/السيارة" لو المدير حب كده.
+   كل الصلاحيات هنا مأخوذة من العمليات والمراحل (Cycles) الموجودة فعليًا بالنظام (مش قائمة مفترضة):
+   مراحل سير الأوردر (draft→حسابات→سيارات→مخازن→مندوب)، شاشات الإدارة التسعة (ADM_TABS)، وكل الشاشات/الأزرار الفعلية.
+*/
+const PERM_GROUPS=[
+  {label:'دورة الأوردرات (Cycle)',keys:[
+    ['order_create','إنشاء وتعديل أوردرات/تحويلات جديدة (مسودة)'],
+    ['order_accounts','اعتماد حسابات العملاء (مرحلة الحسابات)'],
+    ['order_cars','تحديد المندوب والسيارة (مرحلة السيارات)'],
+    ['order_warehouse','تجهيز وتنفيذ المخازن (مرحلة المخازن)'],
+    ['order_rep','استلام وتسليم المندوب (مرحلة المندوب)'],
+    ['order_recall','سحوبات من رصيد عميل بعد الاعتماد/التسليم'],
+    ['order_quality','فحص الجودة (QC) على أي أذن'],
+    ['order_cancel','إلغاء أي عملية/أذن بالكامل'],
+  ]},
+  {label:'الكونترات والنتروجين',keys:[
+    ['counter_ops','عمليات الكونتر اليومية (استلام بالمخزن/استرجاع من معمل/تزويد نتروجين)'],
+  ]},
+  {label:'الشاشات الرئيسية',keys:[
+    ['view_dashboard','عرض لوحة المعلومات (الداشبورد)'],
+    ['view_balances','عرض شاشة الأرصدة'],
+    ['view_all_reports','عرض تقارير كل الموظفين (مش عملياته بس)'],
+    ['edits_access','شاشة تعديلات الأوردرات / المندوب / الإذن المجمع'],
+    ['smart_consolidation','شاشة التوزيع الذكي للأوردرات'],
+    ['backup_restore','النسخ الاحتياطي والاسترداد الفوري'],
+  ]},
+  {label:'إدارة النظام',keys:[
+    ['adm_users','👤 إدارة المستخدمين'],
+    ['adm_customers','🏢 إدارة العملاء'],
+    ['adm_sectors','🗂️ إدارة القطاعات'],
+    ['adm_items','📦 إدارة الأصناف'],
+    ['adm_labs','🧪 إدارة المعامل'],
+    ['adm_counters','🎫 إدارة الكونترات (تسجيل/سعة/إعدادات)'],
+    ['adm_cars','🚗 إدارة السيارات'],
+    ['adm_import','📥 استيراد البيانات (عملاء/أصناف/أذون)'],
+    ['adm_archive','🗄️ الأرشيف'],
+  ]},
+];
+const PERM_KEYS=PERM_GROUPS.flatMap(g=>g.keys.map(k=>k[0]));
+const PERM_LABELS=Object.fromEntries(PERM_GROUPS.flatMap(g=>g.keys));
+// الصلاحيات الافتراضية لكل دور أساسي — دي بس نقطة بداية منطقية عند اختيار الدور (ومطابقة تمامًا للسلوك الحالي بالنظام)،
+// ومقدر المدير يغيّرها تفصيليًا بالكامل بعد كده من خلال الـ Check Box لكل شخص
+function defaultPermsForRole(role){
+  const p={};PERM_KEYS.forEach(k=>p[k]=false);
+  if(role==='admin'){PERM_KEYS.forEach(k=>p[k]=true);return p;}
+  if(role==='data_entry'){p.order_create=true;p.order_recall=true;p.view_balances=true;}
+  else if(role==='accounts'){p.order_accounts=true;p.view_balances=true;p.view_all_reports=true;p.counter_ops=true;}
+  else if(role==='cars'){p.order_cars=true;p.edits_access=true;p.smart_consolidation=true;}
+  else if(role==='warehouse'){p.order_warehouse=true;p.view_all_reports=true;p.counter_ops=true;}
+  else if(role==='rep'){p.order_rep=true;}
+  else if(role==='quality'){p.order_quality=true;p.view_all_reports=true;p.counter_ops=true;}
+  return p;
+}
+// نقطة الفحص الموحّدة لأي صلاحية في كل النظام — لو المستخدم عنده تخصيص صريح لهذه العملية بيتّبع، وإلا بيرجع لافتراضي دوره الأساسي
+function can(u,key){
+  if(!u)return false;
+  if(u.role==='admin')return true; // المدير له كل الصلاحيات دايمًا كحماية أساسية للنظام مهما كانت الإعدادات
+  if(u.permissions&&Object.prototype.hasOwnProperty.call(u.permissions,key))return!!u.permissions[key];
+  return!!defaultPermsForRole(u.role)[key];
+}
+// كل الصلاحيات الفعلية (بعد دمج التخصيص الصريح مع افتراضي الدور) — تُستخدم لبناء شبكة الـ Check Box في شاشة المستخدمين
+function effectivePerms(u){
+  const base=defaultPermsForRole(u?u.role:'');
+  const out={};PERM_KEYS.forEach(k=>out[k]=u&&u.permissions&&Object.prototype.hasOwnProperty.call(u.permissions,k)?!!u.permissions[k]:base[k]);
+  return out;
+}
+// بناء HTML شبكة الـ Check Box لكل عمليات ومراحل النظام لمستخدم معيّن — تُستخدم في نموذج إضافة/تعديل المستخدم
+function permGridHTML(u,idPrefix){
+  const eff=effectivePerms(u||{role:'data_entry'});
+  return `<div class="permgrid" id="${idPrefix}_permgrid">${PERM_GROUPS.map(g=>`
+    <div style="margin:10px 0 4px;font-size:11.5px;font-weight:800;color:var(--blue2);">${g.label}</div>
+    <div class="chkgrid">${g.keys.map(([k,lbl])=>`<label class="chkitem"><input type="checkbox" name="perm_${k}" id="${idPrefix}_${k}" ${eff[k]?'checked':''}> ${lbl}</label>`).join('')}</div>
+  `).join('')}</div>`;
+}
+// قراءة كل صلاحيات الـ Check Box من نموذج مُرسَل وتحويلها لكائن permissions جاهز للحفظ
+function readPermsFromForm(f){
+  const p={};PERM_KEYS.forEach(k=>{p[k]=f.get('perm_'+k)==='on';});
+  return p;
+}
+// إعادة ضبط شبكة الـ Check Box على افتراضي دور معيّن (بيُستخدم لحظة تغيير "الدور" في نموذج إضافة/تعديل مستخدم)
+function applyPermDefaultsToGrid(idPrefix,role){
+  const def=defaultPermsForRole(role);
+  PERM_KEYS.forEach(k=>{const el=document.getElementById(idPrefix+'_'+k);if(el)el.checked=!!def[k];});
+}
 const SLBL={draft:'مسودة',pending_accounts:'بانتظار الحسابات',rejected:'مرفوض',pending_cars:'بانتظار السيارات',pending_warehouse:'بانتظار المخازن',pending_rep:'بانتظار المندوب',with_rep:'مع المندوب',delivered:'تم التسليم',approved:'تم الاستلام بالمخزن ✅',
   return_pending_rep:'مرتجع — بانتظار تأكيد المندوب',return_pending_acc:'مرتجع — بانتظار الحسابات',return_pending_wh:'مرتجع — بانتظار استلام المخازن',returned:'تم تأكيد الإرجاع وإضافة الرصيد ✅',
   customer_return_pending_acc:'سحوبات — بانتظار الحسابات',customer_return_pending_cars:'سحوبات — بانتظار السيارات',customer_return_pending_wh:'سحوبات — بانتظار تأكيد المخزن',customer_returned:'تم تنفيذ السحوبات وخصم الرصيد ✅',
@@ -2469,20 +2565,26 @@ function rSI(){return `<div class="signin">
 }
 
 function getTabs(){
-  const r=S.user.role,all=[{k:'home',ic:'🏠',t:'الرئيسية'}];
-  if(r==='admin')all.push({k:'dash',ic:'📈',t:'الداشبورد'});
-  if(r==='data_entry'||r==='admin')all.push({k:'new',ic:'➕',t:'جديد'},{k:'transfer',ic:'🔁',t:'تحويل'});
-  if(['admin','data_entry','accounts'].includes(r))all.push({k:'bal',ic:'💳',t:'الأرصدة'});
+  const u=S.user,all=[{k:'home',ic:'🏠',t:'الرئيسية'}];
+  if(can(u,'view_dashboard'))all.push({k:'dash',ic:'📈',t:'الداشبورد'});
+  if(can(u,'order_create'))all.push({k:'new',ic:'➕',t:'جديد'},{k:'transfer',ic:'🔁',t:'تحويل'});
+  if(can(u,'view_balances'))all.push({k:'bal',ic:'💳',t:'الأرصدة'});
   all.push({k:'rep',ic:'📊',t:'التقارير'});
-  if(['admin','cars'].includes(r))all.push({k:'edits',ic:'✏️',t:'تعديلات'});
-  if(['admin','cars'].includes(r))all.push({k:'consolidate',ic:'🧠',t:'توزيع ذكي'});
-  if(r==='admin')all.push({k:'adm',ic:'⚙️',t:'الإدارة'});
+  if(can(u,'edits_access'))all.push({k:'edits',ic:'✏️',t:'تعديلات'});
+  if(can(u,'smart_consolidation'))all.push({k:'consolidate',ic:'🧠',t:'توزيع ذكي'});
+  if(u.role==='admin'||PERM_GROUPS[3].keys.some(([k])=>can(u,k)))all.push({k:'adm',ic:'⚙️',t:'الإدارة'});
   return all;
 }
 
 function rShell(){
   const u=S.user;
   let body='';
+  if(S.tab==='dash'&&!can(u,'view_dashboard'))S.tab='home';
+  if((S.tab==='new'||S.tab==='transfer')&&!can(u,'order_create'))S.tab='home';
+  if(S.tab==='bal'&&!can(u,'view_balances'))S.tab='home';
+  if(S.tab==='edits'&&!can(u,'edits_access'))S.tab='home';
+  if(S.tab==='consolidate'&&!can(u,'smart_consolidation'))S.tab='home';
+  if(S.tab==='adm'&&u.role!=='admin'&&!PERM_GROUPS[3].keys.some(([k])=>can(u,k)))S.tab='home';
   if(S.tab==='home')body=rHome();
   else if(S.tab==='dash')body=rDash();
   else if(S.tab==='new')body=rNew();
@@ -2513,15 +2615,16 @@ function rShell(){
 function myPendingTasks(u,list){
   list=list||DB.orders;
   if(!u||!list)return[];
-  switch(u.role){
-    case 'accounts':return list.filter(o=>['pending_accounts','return_pending_acc','customer_return_pending_acc'].includes(o.stage));
-    case 'cars':return list.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars');
-    case 'warehouse':return list.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage));
-    case 'rep':return list.filter(o=>['pending_rep','with_rep','return_pending_rep'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username));
-    case 'admin':return list.filter(o=>['pending_accounts','pending_cars','pending_warehouse','pending_rep','with_rep','return_pending_rep','return_pending_acc','return_pending_wh','customer_return_pending_acc','customer_return_pending_cars','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage));
-    case 'data_entry':return list.filter(o=>o.cby===u.username&&o.stage==='rejected');
-    default:return[];
-  }
+  const sets=[];
+  if(can(u,'order_accounts'))sets.push(list.filter(o=>['pending_accounts','return_pending_acc','customer_return_pending_acc'].includes(o.stage)));
+  if(can(u,'order_cars'))sets.push(list.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars'));
+  if(can(u,'order_warehouse'))sets.push(list.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage)));
+  if(can(u,'order_rep'))sets.push(list.filter(o=>['pending_rep','with_rep','return_pending_rep'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username)));
+  if(can(u,'order_create'))sets.push(list.filter(o=>o.cby===u.username&&o.stage==='rejected'));
+  if(!sets.length)return[];
+  const merged=new Map();
+  sets.forEach(s=>s.forEach(o=>merged.set(o.id,o)));
+  return[...merged.values()];
 }
 function updateBellBadge(){
   const b=document.getElementById('notifBadge');if(!b)return;
@@ -2608,17 +2711,20 @@ function checkNewTasksNotify(prevList,newList){
 }
 
 function forRole(u){
+  const sets=[];
+  if(can(u,'order_create'))sets.push(DB.orders.filter(o=>o.cby===u.username));
+  if(can(u,'order_accounts'))sets.push(DB.orders.filter(o=>['pending_accounts','return_pending_acc','customer_return_pending_acc'].includes(o.stage)));
+  if(can(u,'order_cars'))sets.push(DB.orders.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars'));
+  if(can(u,'order_warehouse'))sets.push(DB.orders.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage)));
+  // نضيف 'delivered' هنا عشان المندوب يقدر يوصل للأذون المجمعة القديمة اللي خلصت تسليم عن طريق اختيار تاريخها من كالندر الرئيسية، حتى لو معندوش شغل جديد النهاردة
+  if(can(u,'order_rep'))sets.push(DB.orders.filter(o=>['pending_rep','with_rep','return_pending_rep','delivered'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username)));
+  if(can(u,'view_all_reports'))sets.push(DB.orders);
   let list;
-  switch(u.role){
-    case 'data_entry':list=DB.orders.filter(o=>o.cby===u.username);break;
-    case 'accounts':list=DB.orders.filter(o=>['pending_accounts','return_pending_acc','customer_return_pending_acc'].includes(o.stage));break;
-    case 'cars':list=DB.orders.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars');break;
-    case 'warehouse':list=DB.orders.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage));break;
-    // نضيف 'delivered' هنا عشان المندوب يقدر يوصل للأذون المجمعة القديمة اللي خلصت تسليم عن طريق اختيار تاريخها من كالندر الرئيسية، حتى لو معندوش شغل جديد النهاردة
-    case 'rep':list=DB.orders.filter(o=>['pending_rep','with_rep','return_pending_rep','delivered'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username));break;
-    case 'admin':list=DB.orders;break;
-    case 'quality':list=DB.orders;break;
-    default:list=[];
+  if(!sets.length)list=[];
+  else{
+    const merged=new Map();
+    sets.forEach(s=>s.forEach(o=>merged.set(o.id,o)));
+    list=[...merged.values()];
   }
   // مدخل البيانات والحسابات لو محدد لهم قطاع معيّن، بيشوفوا بس أوردرات أصناف قطاعهم
   if((u.role==='data_entry'||u.role==='accounts')&&u.sector){
@@ -2900,16 +3006,16 @@ function rDash(){
 
 function rHome(){
   const u=S.user;
-  if(u.role==='rep')prewarmLocation();
+  if(can(u,'order_rep'))prewarmLocation();
   // كل مربع بيضم مرحلته الأساسية + مراحل الارتجاع المرتبطة بيه، عشان يبان فيه لو فيه عملية ارتجاع جارية
   const groups=[
-    {key:'accounts',l:'حسابات العملاء',ic:'🧾',stages:['pending_accounts','return_pending_acc','customer_return_pending_acc'],retStages:['return_pending_acc','customer_return_pending_acc'],roles:['admin','accounts']},
-    {key:'cars',l:'السيارات',ic:'🚗',stages:['pending_cars','customer_return_pending_cars'],retStages:['customer_return_pending_cars'],roles:['admin','cars']},
-    {key:'warehouse',l:'المخازن',ic:'📦',stages:['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'],retStages:['return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'],roles:['admin','warehouse']},
-    {key:'rep',l:'المندوب',ic:'🧍',stages:['pending_rep','with_rep','return_pending_rep'],retStages:['return_pending_rep'],roles:['admin','rep']},
+    {key:'accounts',l:'حسابات العملاء',ic:'🧾',stages:['pending_accounts','return_pending_acc','customer_return_pending_acc'],retStages:['return_pending_acc','customer_return_pending_acc'],cap:'order_accounts'},
+    {key:'cars',l:'السيارات',ic:'🚗',stages:['pending_cars','customer_return_pending_cars'],retStages:['customer_return_pending_cars'],cap:'order_cars'},
+    {key:'warehouse',l:'المخازن',ic:'📦',stages:['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'],retStages:['return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'],cap:'order_warehouse'},
+    {key:'rep',l:'المندوب',ic:'🧍',stages:['pending_rep','with_rep','return_pending_rep'],retStages:['return_pending_rep'],cap:'order_rep'},
   ];
   groups.forEach(g=>{
-    const mine=o=>u.role!=='rep'||(o.repName===u.name||o.repName===u.username);
+    const mine=o=>!can(u,'order_rep')||(o.repName===u.name||o.repName===u.username);
     g.total=DB.orders.filter(o=>g.stages.includes(o.stage)&&mine(o)).length;
     g.retCnt=DB.orders.filter(o=>g.retStages.includes(o.stage)&&mine(o)).length;
   });
@@ -2928,7 +3034,7 @@ function rHome(){
   const listForDots=list; // قبل تصفية اليوم، عشان نقاط الكالندر تعكس كل الطلبات المتاحة
   const sel=S.calDate||ymd(Date.now());
   if(!S.calAll&&!q&&!(S.hflt&&S.hflt.length))list=list.filter(o=>orderDateStr(o)===sel);
-  const chips=groups.filter(c=>c.roles.includes(u.role));
+  const chips=groups.filter(c=>can(u,c.cap));
   const grt=greetingMsg();
   return`
   <div class="stitle">${S.hflt&&S.hflt.length?'مرشّح: '+(S.hfltLabel||''):'الرئيسية'}</div>
@@ -3412,7 +3518,8 @@ function rManifest(rn){
 
 function rRep(){
   const rng=S.rng, u=S.user;
-  const isAdmin = ['admin','accounts','warehouse','quality'].includes(u.role); // الحسابات والمخازن والجودة والأدمن يشوفوا كل التقارير، مدخل البيانات يشوف عملاءه فقط
+  const isAdmin = can(u,'view_all_reports'); // كل اللي عندهم صلاحية "عرض تقارير كل الموظفين" يشوفوا كل التقارير، وإلا يشوف عملياته بس
+  const canCounterOps = can(u,'counter_ops'); // صلاحية منفصلة لعمليات الكونتر اليومية (استلام/استرجاع/تزويد نتروجين)
   // مدخل البيانات يرى فقط العمليات التي أدخلها هو
   const baseList = isAdmin ? DB.orders : (u.role==='rep' ? DB.orders.filter(o=>o.repName&&(o.repName.trim()===u.name||o.repName.trim()===u.username)) : DB.orders.filter(o=>o.cby===u.username));
   const list=baseList.filter(o=>inRng(o,rng)&&((u.role!=='data_entry'&&u.role!=='accounts')||!u.sector||(()=>{const it=fi(o.icode);return !it||it.sector===u.sector;})()));
@@ -3756,7 +3863,7 @@ function rRep(){
     </div>
 
     </div><div class="repgrp ${(S.repGrp||'overview')==='counters'?'':'hide'}">
-    ${isAdmin?`<div class="slabel">📦 الكونترات</div>
+    ${canCounterOps?`<div class="slabel">📦 الكونترات</div>
     <div class="card">
       <div class="brow" style="margin-bottom:10px;">
         <button class="bs bgo" data-a="rcvcnt" type="button">📥 استلام كونتر بالمخزن</button>
@@ -3784,7 +3891,7 @@ function rRep(){
       </form>
     </div>`:''}
 
-    ${isAdmin?`<div class="slabel">🧊 أرصدة النتروجين</div>
+    ${canCounterOps?`<div class="slabel">🧊 أرصدة النتروجين</div>
     <div class="card">
       <div class="kv" style="background:var(--blue-lg);border-radius:8px;padding:9px 12px;margin-bottom:10px;">
         <span style="font-weight:800;">📦 الرصيد الحالي بالمخزن</span><b style="color:var(--ok);font-size:16px;">${n2bal('WH')} لتر</b>
@@ -3894,14 +4001,14 @@ function rOrd(){
   const o=DB.orders.find(x=>x.id===S.oid);
   if(!o)return`<div class="content"><div class="empty">الطلب غير موجود</div></div>`;
   const u=S.user,ia=u.role==='admin';
-  const canEdit=(o.stage==='draft')&&(ia||(u.role==='data_entry'&&o.cby===u.username));
-  const canAcc=(o.stage==='pending_accounts'||o.stage==='return_pending_acc'||o.stage==='customer_return_pending_acc')&&(ia||u.role==='accounts');
-  const canCars=(o.stage==='pending_cars'||o.stage==='customer_return_pending_cars')&&(ia||u.role==='cars');
-  const canWH=(o.stage==='pending_warehouse'||o.stage==='return_pending_wh'||o.stage==='customer_return_pending_wh'||o.stage==='counter_return_pending_wh')&&(ia||u.role==='warehouse');
+  const canEdit=(o.stage==='draft')&&(can(u,'order_create')&&(ia||o.cby===u.username));
+  const canAcc=(o.stage==='pending_accounts'||o.stage==='return_pending_acc'||o.stage==='customer_return_pending_acc')&&can(u,'order_accounts');
+  const canCars=(o.stage==='pending_cars'||o.stage==='customer_return_pending_cars')&&can(u,'order_cars');
+  const canWH=(o.stage==='pending_warehouse'||o.stage==='return_pending_wh'||o.stage==='customer_return_pending_wh'||o.stage==='counter_return_pending_wh')&&can(u,'order_warehouse');
   const repMatch=(o.repName===u.name||o.repName===u.username);
-  const canRR=(o.stage==='pending_rep')&&(ia||(u.role==='rep'&&repMatch));
-  const canRD=(o.stage==='with_rep')&&(ia||(u.role==='rep'&&repMatch));
-  const canRepRet=(o.stage==='return_pending_rep')&&(ia||(u.role==='rep'&&repMatch));
+  const canRR=(o.stage==='pending_rep')&&can(u,'order_rep')&&(ia||repMatch);
+  const canRD=(o.stage==='with_rep')&&can(u,'order_rep')&&(ia||repMatch);
+  const canRepRet=(o.stage==='return_pending_rep')&&can(u,'order_rep')&&(ia||repMatch);
   let flds='';
   if(o.kind==='lab_transfer'){
     flds=`<div class="kv"><span>العميل</span><b>${o.ccode} — ${o.cname||''}</b></div>
@@ -3994,8 +4101,8 @@ function rOrd(){
   if(o.dlvAtt){const isImg=o.dlvAtt.type?.startsWith('image');att+=`<div class="slabel">🧾 إثبات التسليم</div>${isImg?`<a href="${o.dlvAtt.data}" target="_blank" rel="noopener" download="${o.dlvAtt.name||'delivery-proof'}"><img src="${o.dlvAtt.data}" style="width:100%;border-radius:10px;margin-bottom:8px;cursor:pointer;" alt="إثبات التسليم"></a>`:`<a href="${o.dlvAtt.data}" target="_blank" rel="noopener" download="${o.dlvAtt.name||'ملف إثبات التسليم'}" class="attachprev" style="display:flex;align-items:center;gap:8px;text-decoration:none;">📄 ${o.dlvAtt.name||'ملف إثبات التسليم'}<span style="margin-right:auto;color:var(--blue2);font-weight:800;">فتح ⬇️</span></a>`}`;}
   // ===== أزرار الإجراءات =====
   let acts = '';
-  // زرار الإلغاء للأدمن دائماً في الأعلى
-  if(u.role==='admin'){
+  // زرار الإلغاء (متاح لمن عنده صلاحية إلغاء العمليات)
+  if(can(u,'order_cancel')){
     acts += `<div class="brow" style="margin-bottom:10px;">
       <button class="bs" data-a="cancel" data-id="${o.id}" style="width:100%;background:#7f1d1d;color:#fff;font-weight:800;border-radius:9px;padding:11px;">⛔ إلغاء العملية بالكامل</button>
     </div>`;
@@ -4089,7 +4196,7 @@ function rOrd(){
   }
 
   // إتاحة "سحوبات" (سحب جزئي من الرصيد في أي وقت) من أوردر إضافة تم اعتماده، أو من أوردر صرف تم تسليمه
-  const canRecall=((o.kind==='addition'&&o.stage==='approved')||(o.kind==='withdrawal'&&o.stage==='delivered'&&o.orderType==='amanah'))&&(ia||u.role==='data_entry');
+  const canRecall=((o.kind==='addition'&&o.stage==='approved')||(o.kind==='withdrawal'&&o.stage==='delivered'&&o.orderType==='amanah'))&&can(u,'order_recall');
   if(canRecall){
     acts += `<div class="brow" style="margin-top:6px;">
       <button class="bs" data-a="custret" data-id="${o.id}" style="background:#78350F;color:#fff;border-radius:9px;padding:10px;font-weight:800;width:100%;">
@@ -4114,7 +4221,7 @@ function rOrd(){
     <div class="card" style="background:#FBF6EC;border-color:#E5C875;">
       <div style="font-weight:800;font-size:13px;margin-bottom:8px;">🔬 إدارة الجودة</div>
       ${o.qcBy?`<div class="cmeta" style="margin-bottom:6px;">آخر تحديث: <b style="color:${o.qcStatus==='مرفوض'||o.qcStatus==='تالف'?'var(--bad)':o.qcStatus==='مقبول'?'var(--ok)':'var(--warn)'}">${o.qcStatus||'-'}</b> — بواسطة ${o.qcBy} (${new Date(o.qcAt||0).toLocaleString('ar-EG')})${o.qcNote?'<br>ملاحظة: '+o.qcNote:''}</div>`:`<div class="cmeta" style="margin-bottom:6px;">لم يتم تسجيل حالة جودة بعد (لا يوقف هذا سير العمل)</div>`}
-      ${(u.role==='quality'||ia)?`
+      ${can(u,'order_quality')?`
       <div class="field"><label>حالة البضاعة/الكونتر</label><select id="qcs">${qcOpts.map(x=>`<option value="${x}" ${o.qcStatus===x?'selected':''}>${x||'— اختر —'}</option>`).join('')}</select></div>
       <div class="field"><label>ملاحظات الجودة</label><textarea id="qcn" rows="2" placeholder="أي ملاحظات عن حالة البضاعة أو الكونتر...">${o.qcNote||''}</textarea></div>
       <button class="bs" data-a="qc" data-id="${o.id}" style="background:#8A6D1E;color:#fff;width:100%;">💾 حفظ ملاحظة الجودة</button>
@@ -4146,7 +4253,7 @@ function rLabCounters(){
     <div class="brow" style="margin-bottom:8px;">
       <button class="bs bgo" data-a="xlslabcnt" type="button" style="width:100%;">📥 تصدير تقرير Excel</button>
     </div>
-    ${S.user.role==='admin'?`
+    ${can(S.user,'adm_counters')?`
     <div class="card" style="background:var(--blue-lg);border-color:var(--blue2);">
       <div style="font-weight:800;font-size:12px;margin-bottom:6px;">⚙️ إعدادات الحساب التلقائي</div>
       <div class="row2">
@@ -4171,7 +4278,7 @@ function rLabCounters(){
         <td style="color:${stColor(r.status)};font-weight:800;">${r.status}</td>
       </tr>`).join('')}</tbody>
     </table></div>`}
-    ${S.user.role==='admin'?`<button class="bs bghost" style="width:100%;margin-top:12px;" data-a="toggleoos" type="button">🚫 تعليم كونتر "خارج الخدمة" / إلغاء</button>`:''}
+    ${can(S.user,'adm_counters')?`<button class="bs bghost" style="width:100%;margin-top:12px;" data-a="toggleoos" type="button">🚫 تعليم كونتر "خارج الخدمة" / إلغاء</button>`:''}
   </div>`;}
 
 function rCntLog(){
@@ -4217,7 +4324,10 @@ const ADM_TABS=[
   {k:'archive',l:'🗄️ الأرشيف'},
 ];
 function rAdm(){
-  const t=S.admTab||'users';
+  const u=S.user;
+  const allowedAdmTabs=ADM_TABS.filter(x=>can(u,'adm_'+x.k));
+  let t=S.admTab||'';
+  if(!allowedAdmTabs.some(x=>x.k===t))t=allowedAdmTabs.length?allowedAdmTabs[0].k:'';
   const body=(
     t==='users'?rAdmUsers():
     t==='customers'?rAdmCustomers():
@@ -4227,12 +4337,12 @@ function rAdm(){
     t==='counters'?rAdmCounters():
     t==='cars'?rAdmCars():
     t==='import'?rAdmImport():
-    t==='archive'?rAdmArchive():''
+    t==='archive'?rAdmArchive():`<div class="empty">لا توجد أقسام إدارية مُتاحة لك حاليًا</div>`
   );
   return`
   <div class="stitle">الإدارة</div><div class="ssub">مستخدمون · عملاء · أصناف · سيارات</div>
   <div class="content">
-    <div class="pillbar">${ADM_TABS.map(x=>`<button type="button" data-a="admtab" data-t="${x.k}" class="${t===x.k?'on':''}">${x.l}</button>`).join('')}</div>
+    <div class="pillbar">${allowedAdmTabs.map(x=>`<button type="button" data-a="admtab" data-t="${x.k}" class="${t===x.k?'on':''}">${x.l}</button>`).join('')}</div>
     ${body}
   </div>`;
 }
@@ -4258,6 +4368,8 @@ function rAdmUsers(){return`
       <label class="attachbtn" for="upf">📷 صورة المستخدم (مطلوبة)</label>
       <input type="file" id="upf" accept="image/*" capture="user" style="display:none;">
       <div id="upp"></div>
+      <div class="slabel">🔐 الصلاحيات التفصيلية (اختياري — بتتحدد تلقائيًا حسب الدور، وتقدر تعدّلها هنا)</div>
+      ${permGridHTML({role:'data_entry'},'newu')}
       <button class="btn-primary" type="submit">إضافة المستخدم</button>
     </form>
     <div class="slabel">المستخدمون (${DB.users.length})</div>
@@ -4287,6 +4399,8 @@ function rAdmUsers(){return`
             <label>القطاع (اختياري — لو محدد، هيشوف أصناف وأوردرات قطاعه بس)</label>
             <select name="sector"><option value="">كل القطاعات</option>${DB.sectors.map(s=>`<option value="${s.code}" ${u.sector===s.code?'selected':''}>${s.name}</option>`).join('')}</select>
           </div>
+          <div class="slabel">🔐 الصلاحيات التفصيلية لـ ${u.name} (مستقلة عن الدور — عدّل أي عملية براحتك)</div>
+          ${permGridHTML(u,'eu_'+u.username)}
           <div style="display:flex;gap:8px;">
             <button class="btn-primary" type="submit" style="flex:1;">💾 حفظ التعديلات</button>
             <button class="bs bghost" type="button" data-a="edituser" data-un="${u.username}" style="flex:0 0 auto;">إلغاء</button>
@@ -4629,8 +4743,9 @@ function rEditBatchView(){
 function rEditLogView(){
   const u=S.user;
   let log=(DB.editLog||[]).slice().sort((a,b)=>(b.at||0)-(a.at||0));
-  if(u.role!=='admin')log=log.filter(x=>x.byUser===u.username);
-  return `${u.role==='admin'?`<button class="bs bghost" type="button" data-a="editmarkread" style="width:100%;margin-bottom:10px;">✔️ تعليم كل التعديلات كمقروءة</button>`:''}
+  const seeAll=can(u,'view_all_reports');
+  if(!seeAll)log=log.filter(x=>x.byUser===u.username);
+  return `${seeAll?`<button class="bs bghost" type="button" data-a="editmarkread" style="width:100%;margin-bottom:10px;">✔️ تعليم كل التعديلات كمقروءة</button>`:''}
   <div class="slabel">سجل التعديلات (${log.length})</div>
   ${log.length===0?`<div class="empty">لا توجد تعديلات مسجّلة</div>`:log.map(x=>`
     <div class="card">
@@ -4643,7 +4758,7 @@ function rEditLogView(){
     </div>`).join('')}`;
 }
 async function onEditOrderSubmit(e){
-  if(!['admin','cars'].includes(S.user.role))return;
+  if(!can(S.user,'edits_access'))return;
   const f=new FormData(e.target);
   const id=e.target.dataset.id;
   const o=DB.orders.find(x=>x.id===id);
@@ -4667,7 +4782,7 @@ async function onEditOrderSubmit(e){
   S.editSelOid=null;render();
 }
 async function onEditRepSubmit(e){
-  if(!['admin','cars'].includes(S.user.role))return;
+  if(!can(S.user,'edits_access'))return;
   const f=new FormData(e.target);
   const oldRep=e.target.dataset.oldrep;
   const rnSel=f.get('rnSel'),rnOther=(f.get('rnOther')||'').trim();
@@ -4693,7 +4808,7 @@ async function onEditRepSubmit(e){
   S.editRepSel=null;render();
 }
 async function onEditBatchSubmit(e){
-  if(!['admin','cars'].includes(S.user.role))return;
+  if(!can(S.user,'edits_access'))return;
   const f=new FormData(e.target);
   const key=e.target.dataset.key;
   const group=importBatchGroups().find(g=>g.key===key);
@@ -4790,7 +4905,7 @@ function rConsPlanView(){
   </div>`;
 }
 function doConsRun(){
-  if(!['admin','cars'].includes(S.user.role))return;
+  if(!can(S.user,'smart_consolidation'))return;
   const units=(S.consUnits||[]).filter(u=>u.repName&&u.carNo);
   if(!units.length){toast('⛔ حدد مندوبًا وسيارة واحدة على الأقل قبل التشغيل');return;}
   const carSet=new Set(units.map(u=>u.carNo));
@@ -4805,7 +4920,7 @@ function doConsRun(){
   render();
 }
 async function doConsConfirm(){
-  if(!['admin','cars'].includes(S.user.role)||!S.consPlan)return;
+  if(!can(S.user,'smart_consolidation')||!S.consPlan)return;
   const allOrders=[];
   S.consPlan.units.forEach(un=>{
     un.stops.forEach(st=>{
@@ -4919,13 +5034,16 @@ function bind(){
     const wrap=document.getElementById('ausecwrap');
     const toggleSec=()=>{if(wrap)wrap.style.display=(aurole.value==='data_entry'||aurole.value==='accounts')?'':'none';};
     aurole.addEventListener('change',toggleSec);toggleSec();
+    aurole.addEventListener('change',()=>applyPermDefaultsToGrid('newu',aurole.value));
   }
   document.querySelectorAll('[id^="eurole_"]').forEach(sel=>{
     const un=sel.id.replace('eurole_','');
     const wrap=document.getElementById('eusecwrap_'+un);
-    if(!wrap)return;
-    const toggleSec=()=>{wrap.style.display=(sel.value==='data_entry'||sel.value==='accounts')?'':'none';};
-    sel.addEventListener('change',toggleSec);
+    if(wrap){
+      const toggleSec=()=>{wrap.style.display=(sel.value==='data_entry'||sel.value==='accounts')?'':'none';};
+      sel.addEventListener('change',toggleSec);
+    }
+    sel.addEventListener('change',()=>applyPermDefaultsToGrid('eu_'+un,sel.value));
   });
   const cpf=document.getElementById('cpf');if(cpf)cpf.addEventListener('change',onCarPhoto);
   const xf=document.getElementById('xlsFileInput');if(xf)xf.addEventListener('change',onXlsFile);
@@ -5216,7 +5334,7 @@ function onAInner(e){
     exportRowsToXLS(rows,'FEFO_Default_vs_Actual.xlsx','Default vs FEFO');
   }
   else if(a==='wtype'){S.wtype=el.dataset.wt;render();}
-  else if(a==='flt'){if(S.user.role==='admin'||S.user.role==='rep'){S.hflt=el.dataset.stage.split(',');S.hfltLabel=el.dataset.label||'';render();}}
+  else if(a==='flt'){S.hflt=el.dataset.stage.split(',');S.hfltLabel=el.dataset.label||'';render();}
   else if(a==='clf'){S.hflt=null;S.hfltLabel='';render();}
   else if(a==='calday'){S.calDate=el.dataset.date;S.calAll=false;render();}
   else if(a==='calweek'){S.calDate=addDaysStr(S.calDate||ymd(Date.now()),7*(+el.dataset.dir));render();}
@@ -5339,7 +5457,7 @@ async function onNew(e){
   if(kind==='withdrawal'&&orderType==='amanah'&&labCode&&!labsForCustomer(cc).some(l=>l.code===labCode)){toast('⛔ هذا المعمل غير تابع لهذا العميل');return;}
   if(kind==='withdrawal'&&orderType==='amanah'&&counterCode){
     const counter=DB.counters.find(x=>x.code===counterCode);
-    if(counter&&counter.owner&&counter.owner!==u.username&&u.role!=='admin'){
+    if(counter&&counter.owner&&counter.owner!==u.username&&!can(u,'adm_counters')){
       toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط — لا يمكنك صرفه`);return;
     }
   }
@@ -5373,7 +5491,7 @@ async function onTrf(e){
   if(wantsCounter){
     const counter=DB.counters.find(c=>c.code===counterCode);
     if(!counter){toast('⛔ كود الكونتر غير موجود');return;}
-    if(counter.owner&&counter.owner!==u.username&&u.role!=='admin'){
+    if(counter.owner&&counter.owner!==u.username&&!can(u,'adm_counters')){
       toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط — لا يمكنك تحويله`);return;
     }
     const cAvail=cbal(flab,counterCode);
@@ -5697,6 +5815,7 @@ async function onEU(e){
   u.username=newUn;u.name=name;u.role=role;
   if(role==='data_entry'||role==='accounts')u.sector=sector;else delete u.sector;
   if(pw)u.password=pw;
+  u.permissions=readPermsFromForm(f);
   await svu();
   if(S.user&&S.user.username===oldUn)S.user=u; // لو المدير كان بيعدّل حسابه هو نفسه
   S.editUn=null;toast('✅ تم حفظ تعديلات المستخدم');render();
@@ -5707,7 +5826,7 @@ async function onAU(e){
   if(DB.users.some(u=>u.username===un)){toast('اسم المستخدم موجود مسبقًا');return;}
   if(!pendUPhoto){toast('⛔ صورة المستخدم مطلوبة — اضغط على "صورة المستخدم" وارفع صورة أولاً');return;}
   const role=f.get('role');
-  const newU={username:un,password:f.get('pw'),name:f.get('name'),role,active:true,photo:pendUPhoto};
+  const newU={username:un,password:f.get('pw'),name:f.get('name'),role,active:true,photo:pendUPhoto,permissions:readPermsFromForm(f)};
   if(role==='data_entry'||role==='accounts')newU.sector=(f.get('sector')||'').trim();
   DB.users.push(newU);
   await svu();toast('تم إضافة المستخدم');e.target.reset();pendUPhoto=null;render();
@@ -5822,7 +5941,7 @@ async function doEditCapacity(){
 }
 
 async function doQC(id){
-  if(!(S.user.role==='quality'||S.user.role==='admin')){toast('⛔ إدارة الجودة فقط هي المخوّلة بهذا الإجراء');return;}
+  if(!can(S.user,'order_quality')){toast('⛔ ليس لديك صلاحية إدارة الجودة');return;}
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
   const qcs=document.getElementById('qcs'),qcn=document.getElementById('qcn');
   o.qcStatus=qcs?qcs.value:'';o.qcNote=qcn?qcn.value:'';
@@ -5877,7 +5996,7 @@ async function onN2Fill(e){
   if(!liters||liters<=0){toast('⛔ أدخلي كمية نتروجين صحيحة');return;}
   const counter=DB.counters.find(c=>c.code===counterCode);
   if(!counter){toast('⛔ الكونتر غير موجود');return;}
-  if(counter.owner&&counter.owner!==S.user.username&&S.user.role!=='admin'){
+  if(counter.owner&&counter.owner!==S.user.username&&!can(S.user,'adm_counters')){
     toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط`);return;
   }
   const lab=DB.labs.find(l=>l.code===labCode);
@@ -5910,7 +6029,7 @@ async function onCounterReturn(e){
   if(!qty||qty<=0){toast('⛔ أدخلي كمية صحيحة');return;}
   const lab=DB.labs.find(l=>l.code===labCode);if(!lab){toast('⛔ المعمل غير موجود');return;}
   const counter=DB.counters.find(c=>c.code===counterCode);if(!counter){toast('⛔ الكونتر غير موجود');return;}
-  if(counter.owner&&counter.owner!==S.user.username&&S.user.role!=='admin'){
+  if(counter.owner&&counter.owner!==S.user.username&&!can(S.user,'adm_counters')){
     toast(`⛔ الكونتر ده مسؤوليّة ${u2n(counter.owner)} فقط — هو المخوّل باسترجاعه`);return;
   }
   const avail=cbal(labCode,counter.code);
@@ -5974,7 +6093,7 @@ function u2n(username){const u=DB.users.find(x=>x.username===username);return u?
 
 async function doCancel(id){
   const o=DB.orders.find(x=>x.id===id);if(!o)return;
-  if(S.user.role!=='admin'){toast('⛔ فقط المدير يمكنه إلغاء العمليات');return;}
+  if(!can(S.user,'order_cancel')){toast('⛔ ليس لديك صلاحية إلغاء العمليات');return;}
   if(!confirm('هل أنت متأكد من إلغاء هذه العملية بالكامل؟ سيتم حذفها من السجلات.')) return;
   // Reverse balance if needed
   // عكس الرصيد حسب نوع الأوردر
