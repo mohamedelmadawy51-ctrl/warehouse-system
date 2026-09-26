@@ -2619,7 +2619,7 @@ function myPendingTasks(u,list){
   if(can(u,'order_accounts'))sets.push(list.filter(o=>['pending_accounts','return_pending_acc','customer_return_pending_acc'].includes(o.stage)));
   if(can(u,'order_cars'))sets.push(list.filter(o=>o.stage==='pending_cars'||o.stage==='customer_return_pending_cars'));
   if(can(u,'order_warehouse'))sets.push(list.filter(o=>['pending_warehouse','return_pending_wh','customer_return_pending_wh','counter_return_pending_wh'].includes(o.stage)));
-  if(can(u,'order_rep'))sets.push(list.filter(o=>['pending_rep','with_rep','return_pending_rep'].includes(o.stage)&&(o.repName===u.name||o.repName===u.username)));
+  if(can(u,'order_rep'))sets.push(list.filter(o=>['pending_rep','with_rep','return_pending_rep'].includes(o.stage)&&(u.role==='admin'||can(u,'view_all_reports')||o.repName===u.name||o.repName===u.username)));
   if(can(u,'order_create'))sets.push(list.filter(o=>o.cby===u.username&&o.stage==='rejected'));
   if(!sets.length)return[];
   const merged=new Map();
@@ -3015,7 +3015,7 @@ function rHome(){
     {key:'rep',l:'المندوب',ic:'🧍',stages:['pending_rep','with_rep','return_pending_rep'],retStages:['return_pending_rep'],cap:'order_rep'},
   ];
   groups.forEach(g=>{
-    const mine=o=>!can(u,'order_rep')||(o.repName===u.name||o.repName===u.username);
+    const mine=o=>u.role==='admin'||can(u,'view_all_reports')||!can(u,'order_rep')||(o.repName===u.name||o.repName===u.username);
     g.total=DB.orders.filter(o=>g.stages.includes(o.stage)&&mine(o)).length;
     g.retCnt=DB.orders.filter(o=>g.retStages.includes(o.stage)&&mine(o)).length;
   });
