@@ -411,9 +411,10 @@ if(IS_CONFIGURED){
 // تسجيل دخول صامت (Anonymous Auth) — لازم عشان قواعد الأمان الجديدة اللي بتمنع أي حد من النت
 async function ensureFirebaseAuth(){
   if(!IS_CONFIGURED || !firebase.auth) return true;
+  if(!navigator.onLine) return false; // مفيش إنترنت أصلاً — منحاولش نتصل بالسيرفر خالص عشان الإقلاع يبقى فوري بدل ما يعلّق
   try{
     if(firebase.auth().currentUser) return true;
-    await firebase.auth().signInAnonymously();
+    await withTimeout(firebase.auth().signInAnonymously(), 8000, 'auth'); // مهلة قصوى 8 ثواني بدل انتظار بلا نهاية لو الشبكة متقطعة فعليًا رغم إن المتصفح شايفها "متصلة"
     return true;
   }catch(e){
     console.error('Firebase auth error', e);
@@ -431,6 +432,7 @@ function withTimeout(promise, ms=20000, label=''){
 }
 async function dbGet(k, fb){
   if(!FDB) return fb;
+  if(!navigator.onLine) return fb; // إقلاع فوري بدون إنترنت بدل انتظار مهلة الشبكة كاملة
   try{
     if(IS_CONFIGURED)await ensureFirebaseAuth(); // نتأكد إننا مسجَّلين (Anonymous) قبل أي قراءة، تحسّبًا لانتهاء الجلسة
     const snap = await withTimeout(FDB.ref(ROOT+k).once('value'), 20000, k);
@@ -463,8 +465,9 @@ async function dbRemove(k){
 let ordersRef2=null;
 async function fetchOrdersData(){
   if(!FDB)return;
+  if(!navigator.onLine)return; // مفيش إنترنت — منستناش على الإطلاق، نسيب DB.orders زي ما هي (فاضية أو من جلسة سابقة)
   try{
-    const snap=await FDB.ref(ROOT+'ift_orders').once('value');
+    const snap=await withTimeout(FDB.ref(ROOT+'ift_orders').once('value'), 20000, 'orders');
     const val=snap.val();
     DB.orders=val?Object.values(val):[];
   }catch(e){console.error('fetch orders error',e);}
@@ -1047,6 +1050,7 @@ async function dbGetCritical(k, {retries=2, timeoutMs=20000}={}){
   // عشان الاستدعاء يقدر يفرّق بين "القراءة نجحت ورجعت فاضية فعلاً" و"القراءة فشلت/انتهت مهلتها"
   // ده مهم جدًا لمفتاح المستخدمين (ift_users): لو اعتبرنا فشل القراءة = "مفيش مستخدمين"، هنمسح كل المستخدمين
   // الحقيقيين محليًا (وممكن حتى نكتبهم فوق النسخة الحقيقية على فايرباس!) لمجرد بطء مؤقت في الشبكة.
+  if(!navigator.onLine) throw new Error('offline:'+k); // مفيش إنترنت أصلاً — منضيّعش وقت في محاولات وتأخيرات هنفشل فيها أكيد
   let lastErr;
   for(let i=0;i<=retries;i++){
     try{
@@ -1063,6 +1067,23 @@ async function dbGetCritical(k, {retries=2, timeoutMs=20000}={}){
 }
 
 let dbLoadError=false; // true لو فشلت قراءة بيانات المستخدمين الحرجة بعد كل المحاولات
+// نسخة محلية خفيفة (مستخدمين + بيانات أساسية فقط، من غير الأوردرات تجنبًا لامتلاء التخزين) بتتحفظ بعد كل تحميل ناجح،
+// وبتُستخدم فورًا لو التطبيق اتفتح من جديد ومفيش إنترنت خالص — عشان يقدر يسجّل دخول ويشتغل بالحد الأدنى من البيانات
+const OFFLINE_SNAPSHOT_KEY='ift_offline_snapshot_v1';
+const OFFLINE_SNAPSHOT_PROPS=['users','customers','items','sectors','labs','cars','settings','counters'];
+function saveOfflineSnapshot(){
+  try{
+    const snap={savedAt:Date.now()};
+    OFFLINE_SNAPSHOT_PROPS.forEach(p=>{snap[p]=DB[p];});
+    localStorage.setItem(OFFLINE_SNAPSHOT_KEY, JSON.stringify(snap));
+  }catch(e){ console.error('تعذّر حفظ نسخة محلية للعمل بدون إنترنت',e); }
+}
+function loadOfflineSnapshot(){
+  try{
+    const raw=localStorage.getItem(OFFLINE_SNAPSHOT_KEY);
+    return raw?JSON.parse(raw):null;
+  }catch(e){ return null; }
+}
 async function loadDB(){
   const keys=[
     ['customers','ift_customers',[{code:'C001',name:'صيدلية النور'},{code:'C002',name:'مجمع الشفاء'}]],
@@ -1084,25 +1105,40 @@ async function loadDB(){
   ];
   // قراءة بيانات المستخدمين بشكل حرج ومنفصل (مع إعادة محاولة) — أهم بيانات في النظام ولازم لا نخطئ في التعامل معها
   dbLoadError=false;
+  const offline = typeof navigator!=='undefined' && !navigator.onLine;
+  const snapshot = offline ? loadOfflineSnapshot() : null;
   if(FDB){
-    try{
-      DB.users = await dbGetCritical('ift_users');
-    }catch(e){
-      console.error('تعذّر تحميل بيانات المستخدمين نهائيًا بعد إعادة المحاولة',e);
-      dbLoadError=true;
-      DB.users = DB.users || []; // نسيب أي نسخة سابقة موجودة في الذاكرة زي ما هي، وما نكتبش أي حاجة فوقها
+    if(offline){
+      // مفيش إنترنت أصلاً — منحاولش نتصل بالسيرفر خالص، نستخدم آخر نسخة محفوظة محليًا فورًا (أو الموجودة بالذاكرة لو الجلسة مستمرة)
+      dbLoadError = !((DB.users&&DB.users.length) || (snapshot&&snapshot.users&&snapshot.users.length));
+      DB.users = (DB.users&&DB.users.length?DB.users:null) || (snapshot&&snapshot.users) || [];
+    } else {
+      try{
+        DB.users = await dbGetCritical('ift_users');
+      }catch(e){
+        console.error('تعذّر تحميل بيانات المستخدمين نهائيًا بعد إعادة المحاولة',e);
+        dbLoadError=true;
+        DB.users = DB.users || []; // نسيب أي نسخة سابقة موجودة في الذاكرة زي ما هي، وما نكتبش أي حاجة فوقها
+      }
     }
   } else {
     DB.users = DB.users || null;
   }
-  // نجيب باقي المفاتيح مع بعض بالتوازي — دي أقل حساسية، وفشل قراءتها مؤقتًا بيرجع لقيم افتراضية آمنة بدل ما يوقف الدخول
-  const results=await Promise.all([...keys.map(([,k,fb])=>dbGet(k,fb)),fetchOrdersData()]);
+  let results;
+  if(offline && FDB){
+    // إقلاع فوري بالكامل بدون أي محاولة اتصال بالشبكة — نستخدم النسخة المحفوظة محليًا لو موجودة، وإلا القيم الافتراضية
+    results = keys.map(([prop,,fb])=> (DB[prop]&&(!Array.isArray(DB[prop])||DB[prop].length)?DB[prop]:null) ?? (snapshot&&snapshot[prop]) ?? fb);
+    DB.orders = DB.orders || []; // مفيش نسخة محلية من الأوردرات (تجنبًا لامتلاء التخزين) — هتترحّل تلقائيًا فور رجوع الاتصال
+  } else {
+    // نجيب باقي المفاتيح مع بعض بالتوازي — دي أقل حساسية، وفشل قراءتها مؤقتًا بيرجع لقيم افتراضية آمنة بدل ما يوقف الدخول
+    results=await Promise.all([...keys.map(([,k,fb])=>dbGet(k,fb)),fetchOrdersData()]);
+  }
   keys.forEach(([prop],i)=>{DB[prop]=results[i];});
   if(!FDB){DB.orders=DB.orders||[];} // بدون فايرباس (وضع تجريبي محلي) خلي DB.orders زي ما هي فاضية
 
   // إنشاء حساب المدير الافتراضي بس لو قراءة المستخدمين نجحت فعليًا ورجعت فاضية (أول تشغيل حقيقي للنظام)
-  // — وليس في حالة فشل القراءة (dbLoadError)، عشان ميتكتبش يوزر افتراضي فوق بيانات حقيقية بسبب مشكلة اتصال مؤقتة
-  if(!dbLoadError&&(!DB.users||!DB.users.length)){DB.users=[{username:'admin',password:'admin123',name:'مدير النظام',role:'admin',active:true}];await dbSet('ift_users',DB.users);}
+  // — وليس في حالة فشل القراءة (dbLoadError) أو الإقلاع أوفلاين، عشان ميتكتبش يوزر افتراضي فوق بيانات حقيقية بسبب مشكلة اتصال مؤقتة
+  if(!dbLoadError&&!offline&&(!DB.users||!DB.users.length)){DB.users=[{username:'admin',password:'admin123',name:'مدير النظام',role:'admin',active:true}];await dbSet('ift_users',DB.users);}
   // ترحيل بيانات قديمة: كل معمل كان مربوط بعميل واحد فقط (custCode)، دلوقتي ممكن يكون مربوط بأكتر من عميل (custCodes) — من غير ما نأثر على البيانات القديمة
   let labsMigrated=false;
   (DB.labs||[]).forEach(l=>{if((!l.custCodes||!l.custCodes.length)&&l.custCode){l.custCodes=[l.custCode];labsMigrated=true;}});
@@ -1127,6 +1163,9 @@ async function loadDB(){
     }
   });
   if(lbMigrated){DB.labBalances=newLB;await svlb();}
+  // بعد أي تحميل ناجح فعليًا أونلاين (من غير أي خطأ)، نحدّث النسخة المحلية الاحتياطية عشان لو النت قطع بعد كده
+  // نقدر نفتح التطبيق ونسجّل دخول بأحدث بيانات كانت متاحة، بدل ما نستنى اتصال بالسيرفر مش موجود
+  if(FDB && !offline && !dbLoadError){ saveOfflineSnapshot(); }
 }
 async function svu(){await dbSet('ift_users',DB.users);}
 async function svc(){await dbSet('ift_customers',DB.customers);}
