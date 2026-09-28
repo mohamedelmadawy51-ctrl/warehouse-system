@@ -2549,7 +2549,7 @@ function bpMetaChanged(){
   clearTimeout(_bpRenderTimer);
   _bpRenderTimer=setTimeout(()=>{
     if(S.bpView)return;
-    if(S.printRep||(S.tab==='adm'&&S.admTab==='batchpdf')||S.tab==='order')render();
+    if(S.printRep||S.oid||(S.tab==='adm'&&S.admTab==='batchpdf'))render();
   },150);
 }
 function bpEnsureMeta(){
@@ -2964,10 +2964,9 @@ function bpOrderLinkHtml(o){
   const ic=(o.icode||'').trim();
   const btns=list.map(b=>{
     const k=bpKey(ic,b),n=bpFiles(k).length;
-    return n?`<button type="button" class="bs bghost" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" data-a="bporder" data-key="${bpEsc(k)}" data-ic="${bpEsc(ic)}" data-b="${bpEsc(b)}">📄 إفراج ${bpEsc(b)}</button>`:'';
-  }).filter(Boolean);
-  if(!btns.length)return'';
-  return`<div class="kv" style="flex-wrap:wrap;gap:6px;"><span>ملف الإفراج</span><span style="display:flex;gap:6px;flex-wrap:wrap;">${btns.join('')}</span></div>`;
+    return n?`<button type="button" class="bs bgo" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" data-a="bporder" data-key="${bpEsc(k)}" data-ic="${bpEsc(ic)}" data-b="${bpEsc(b)}">📄 إفراج ${bpEsc(b)}</button>`:`<span class="bpchip no">⚠️ ${bpEsc(b)}: لا يوجد إفراج</span>`;
+  });
+  return`<div class="kv" style="flex-wrap:wrap;gap:6px;"><span>إفراج الصنف</span><span style="display:flex;gap:6px;flex-wrap:wrap;">${btns.join('')}</span></div>`;
 }
 
 /* ---------- ربط أحداث الشاشة (رفع الملفات، البحث، إضافة يدوية) ---------- */
@@ -2995,7 +2994,10 @@ function bpHandleAction(a,el){
     case'bpprint':{const r=bpKnownBatches().find(x=>x.key===d.key);if(r)bpPrintLabels([r]);return true;}
     case'bpprintall':bpPrintLabels(bpListRows().rows);return true;
     case'bpcopy':bpCopy(d.url);return true;
-    case'bporder':bpOpenEntries([{key:d.key,icode:d.ic,batch:d.b}]);return true;
+    case'bporder':{ // إفراج هذا الصنف/التشغيلة فقط — نفس صفحة QR التشغيلة (نفس السلوك على الكمبيوتر والموبايل)
+      const u=bpUrl(d.ic,d.b);
+      if(!window.open(u,'_blank'))location.href=u;
+      return true;}
     case'bprelopen':{
       const st=BPDF.rel;if(!st||!st.url){toast('⏳ الملف لسه بيتجمّع...');return true;}
       const w=window.open(st.url,'_blank');if(!w)bpDownloadBlob(st.url,bpRelFileName());
