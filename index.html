@@ -12,6 +12,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <style>
 :root{
   --blue:#0B2E5C;--blue2:#1651A6;--blue-lg:#E8F0FE;
@@ -373,6 +374,13 @@ table.mtbl tr:nth-child(even) td{background:#f6f8fa;}
     transition:.2s;line-height:1;
   }
   .theme-toggle:active{transform:scale(.92);}
+.bpfile{display:flex;align-items:center;gap:8px;background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin-bottom:6px;font-size:11.5px;}
+.bpfile .nm{flex:1;min-width:0;font-weight:700;word-break:break-all;}
+.bpfile button{flex:0 0 auto;padding:6px 10px;font-size:11px;}
+.bpchip{display:inline-block;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:999px;margin:2px;border:1px solid var(--line);background:#fff;word-break:break-all;}
+.bpchip.ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok);}
+.bpchip.no{background:var(--warn-bg);color:var(--warn);border-color:var(--warn);}
+.bpchip.bad{background:var(--bad-bg);color:var(--bad);border-color:var(--bad);}
 </style>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
@@ -1648,6 +1656,7 @@ const PERM_GROUPS=[
     ['adm_cars','🚗 إدارة السيارات'],
     ['adm_import','📥 استيراد البيانات (عملاء/أصناف/أذون)'],
     ['adm_archive','🗄️ الأرشيف'],
+    ['adm_batchpdf','📄 إدارة ملفات إفراج التشغيلات (PDF)'],
   ]},
 ];
 const PERM_KEYS=PERM_GROUPS.flatMap(g=>g.keys.map(k=>k[0]));
@@ -1662,7 +1671,7 @@ function defaultPermsForRole(role){
   else if(role==='cars'){p.order_cars=true;p.edits_access=true;p.smart_consolidation=true;}
   else if(role==='warehouse'){p.order_warehouse=true;p.view_all_reports=true;p.counter_ops=true;}
   else if(role==='rep'){p.order_rep=true;}
-  else if(role==='quality'){p.order_quality=true;p.view_all_reports=true;p.counter_ops=true;}
+  else if(role==='quality'){p.order_quality=true;p.view_all_reports=true;p.counter_ops=true;p.adm_batchpdf=true;}
   return p;
 }
 // نقطة الفحص الموحّدة لأي صلاحية في كل النظام — لو المستخدم عنده تخصيص صريح لهذه العملية بيتّبع، وإلا بيرجع لافتراضي دوره الأساسي
@@ -2465,16 +2474,19 @@ function routeFromMsg(msg){
 let dbReady=false;
 async function init(){
   nightMode=localStorage.getItem(NIGHT_KEY)==='1';applyNight();
+  bpInitFromUrl(); // لو الرابط جاي من QR تشغيلة
   S.screen='welcome';render(); // نعرض شاشة الدخول فورًا من غير ما ننتظر تحميل قاعدة البيانات
   loadWeather();
   // لازم نسجّل دخول صامت (Anonymous Auth) الأول قبل أي قراءة/كتابة على قاعدة البيانات،
   // عشان قواعد الأمان الجديدة بترفض أي عملية من غير مستخدم مسجَّل (auth != null) — ده كان ناقص خالص قبل كده
   if(IS_CONFIGURED)await ensureFirebaseAuth();
+  if(S.bpView&&S.bpView.mode!=='rel'){bpPublicLoad();return;} // فتح QR تشغيلة: نعرض ملف الإفراج فقط بدون تحميل باقي بيانات النظام
   if(IS_CONFIGURED)migrateOrdersToKeyedFormatIfNeeded(); // بدون await — تعمل في الخلفية وميعطلش فتح التطبيق أو أي إجراء تاني
   await loadDB();
   dbReady=true;
   if(IS_CONFIGURED && !dbLoadError){startRealTimeSync();}
   if(window.__refreshSyncBadge)window.__refreshSyncBadge();
+  if(S.bpView&&S.bpView.mode==='rel')bpRelPublicLoad(); // QR الإذن المجمع: نجمّع إفراجات تشغيلات الإذن ونفتحها
   applyPublicManifestLinkIfAny(); // لو الرابط ده جاي من مسح كود QR لإذن مجمع، نفتحه على طول من غير تسجيل دخول
   if(S.screen==='signin')render(); // لو كانت شاشة الدخول متفتحة وقت اكتمال التحميل، نحدّثها
 }
@@ -2508,6 +2520,667 @@ function buildQRSvg(text){
     return qr.createSvgTag({cellSize:4,margin:2,scalable:true});
   }catch(e){return '';}
 }
+/* ============================================================
+   📄 إفراجات التشغيلات (Batch Release PDFs)
+   - كل تشغيلة (صنف + رقم تشغيلة) لها QR يفتح ملف/ملفات PDF الإفراج الخاصة بها
+   - إدارة ورفع الملفات من: الإدارة ← 📄 إفراجات التشغيلات
+   - عند فتح الإذن المجمع/كشف المندوب يتم تجميع إفراجات تشغيلات الإذن فقط في PDF واحد تلقائيًا (بنفس الترتيب)
+   - التخزين: Firebase Realtime DB — بيانات وصفية صغيرة (ift_bpdf_meta) منفصلة عن محتوى الملفات (ift_bpdf_data) عشان التحميل يفضل خفيف
+   ============================================================ */
+const BP_MAX_BYTES=7*1024*1024; // الحد الأقصى لملف واحد (حد Firebase للنص الواحد ~10MB بعد التحويل Base64)
+const BPDF={meta:{},loaded:false,listening:false,err:'',bytes:new Map(),rel:null,relCtx:null};
+function bpNorm(b){return String(b==null?'':b).trim().replace(/\s+/g,' ').toUpperCase();}
+function bpEnc(x){return encodeURIComponent(x).replace(/\./g,'%2E');}
+// مفتاح التشغيلة = كود الصنف + رقم التشغيلة (نفس منطق النظام: التشغيلة تتبع الصنف)
+function bpKey(ic,b){return bpEnc(String(ic==null?'':ic).trim())+'__'+bpEnc(bpNorm(b));}
+function bpEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function bpBaseUrl(){return location.origin+location.pathname;}
+function bpUrl(ic,b){return bpBaseUrl()+'?batchpdf=1&i='+encodeURIComponent(ic)+'&b='+encodeURIComponent(b);}
+function bpIsMobile(){return /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent||'');}
+function bpFiles(key){
+  const m=BPDF.meta[key];if(!m||!m.files)return[];
+  return Object.entries(m.files).map(([id,f])=>Object.assign({id},f)).sort((a,b)=>(a.at||0)-(b.at||0)||(a.name||'').localeCompare(b.name||''));
+}
+function bpFmtSize(n){n=+n||0;return n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';}
+
+/* ---------- تحميل البيانات الوصفية (خفيفة) مع تحديث لحظي ---------- */
+let _bpRenderTimer=null;
+function bpMetaChanged(){
+  clearTimeout(_bpRenderTimer);
+  _bpRenderTimer=setTimeout(()=>{
+    if(S.bpView)return;
+    if(S.printRep||(S.tab==='adm'&&S.admTab==='batchpdf')||S.tab==='order')render();
+  },150);
+}
+function bpEnsureMeta(){
+  if(BPDF.listening||!FDB)return;
+  if(!navigator.onLine){BPDF.err='offline';return;}
+  BPDF.listening=true;
+  ensureFirebaseAuth().then(()=>{
+    FDB.ref(ROOT+'ift_bpdf_meta').on('value',snap=>{
+      BPDF.meta=snap.val()||{};BPDF.loaded=true;BPDF.err='';bpMetaChanged();
+    },err=>{console.error('bpdf meta error',err);BPDF.err='denied';BPDF.listening=false;bpMetaChanged();});
+  });
+}
+/* ---------- قراءة محتوى ملف PDF عند الحاجة فقط ---------- */
+async function bpGetBytes(key,fid){
+  const ck=key+'|'+fid;
+  if(BPDF.bytes.has(ck))return BPDF.bytes.get(ck);
+  if(!FDB)throw new Error('قاعدة البيانات غير مُعدّة');
+  await ensureFirebaseAuth();
+  const snap=await withTimeout(FDB.ref(ROOT+'ift_bpdf_data/'+key+'/'+fid).once('value'),60000,'bpdata');
+  const b64=snap.val();
+  if(!b64)throw new Error('محتوى الملف غير موجود');
+  const bin=atob(b64),u8=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
+  if(BPDF.bytes.size>=40)BPDF.bytes.delete(BPDF.bytes.keys().next().value); // حد أقصى للذاكرة
+  BPDF.bytes.set(ck,u8);
+  return u8;
+}
+function bpBytesToB64(u8){
+  let s='';const CH=0x8000;
+  for(let i=0;i<u8.length;i+=CH)s+=String.fromCharCode.apply(null,u8.subarray(i,i+CH));
+  return btoa(s);
+}
+function bpDownloadBlob(url,name){
+  const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();
+  setTimeout(()=>{a.remove();},0);
+}
+// نفتح نافذة فورًا (داخل ضغطة المستخدم) عشان المتصفح ما يمنعها، وبعدين نحمّل الملف ونوجّهها له
+function bpPreOpen(){
+  const w=window.open('','_blank');
+  if(w){try{w.document.write('<meta charset="utf-8"><title>جارِ التحميل</title><body style="font-family:sans-serif;text-align:center;padding:48px;direction:rtl;color:#0B2E5C">⏳ جارِ تحميل ملف الإفراج...</body>');}catch(_){}}
+  return w;
+}
+async function bpOpenFile(key,fid){
+  const w=bpPreOpen();
+  try{
+    const u8=await bpGetBytes(key,fid);
+    const url=URL.createObjectURL(new Blob([u8],{type:'application/pdf'}));
+    if(w)w.location.href=url;else bpDownloadBlob(url,'release.pdf');
+  }catch(e){try{w&&w.close();}catch(_){}toast('⚠️ تعذّر فتح الملف: '+(e&&e.message?e.message:''));}
+}
+async function bpDownloadFile(key,fid){
+  try{
+    const f=bpFiles(key).find(x=>x.id===fid);
+    const u8=await bpGetBytes(key,fid);
+    bpDownloadBlob(URL.createObjectURL(new Blob([u8],{type:'application/pdf'})),(f&&f.name)||'release.pdf');
+  }catch(e){toast('⚠️ تعذّر تحميل الملف: '+(e&&e.message?e.message:''));}
+}
+// فتح إفراج تشغيلة (أو أكتر) كملف واحد — لو للتشغيلة أكتر من ملف بيتم دمجهم
+async function bpOpenEntries(entries){
+  const w=bpPreOpen();
+  try{
+    const r=await bpMergeEntries(entries);
+    if(!r.bytes)throw new Error('لا توجد ملفات إفراج');
+    const url=URL.createObjectURL(new Blob([r.bytes],{type:'application/pdf'}));
+    if(w)w.location.href=url;else bpDownloadBlob(url,'release.pdf');
+  }catch(e){try{w&&w.close();}catch(_){}toast('⚠️ تعذّر فتح الإفراج: '+(e&&e.message?e.message:''));}
+}
+
+/* ---------- الدمج: يجمع كل ملفات التشغيلات المطلوبة فقط بنفس ترتيبها ---------- */
+async function bpMergeEntries(entries,onProgress){
+  if(typeof PDFLib==='undefined')throw new Error('مكتبة دمج PDF لم تُحمَّل — تأكد من الاتصال بالإنترنت وأعد تحديث الصفحة');
+  const {PDFDocument}=PDFLib;
+  const out=await PDFDocument.create();
+  const included=[],missing=[],failed=[];
+  let done=0;
+  for(const e of entries){
+    const files=bpFiles(e.key);
+    if(!files.length){missing.push(e);}
+    else{
+      let okAny=false;
+      for(const f of files){
+        try{
+          const bytes=await bpGetBytes(e.key,f.id);
+          const src=await PDFDocument.load(bytes);
+          const pages=await out.copyPages(src,src.getPageIndices());
+          pages.forEach(p=>out.addPage(p));
+          okAny=true;
+        }catch(err){failed.push({key:e.key,batch:e.batch,file:f.name,err:(err&&err.message)||String(err)});}
+      }
+      if(okAny)included.push(e);
+    }
+    done++;if(onProgress)onProgress(done,entries.length);
+  }
+  const pages=out.getPageCount();
+  if(!pages)return{bytes:null,pages:0,included,missing,failed};
+  out.setTitle('IFT - Batch Release Certificates');
+  const bytes=await out.save();
+  return{bytes,pages,included,missing,failed};
+}
+
+/* ---------- تشغيلات الأوردر/الإذن (الموجودة فعليًا فقط) ---------- */
+// التشغيلات المسجّلة فعليًا على الأوردر: الصرف الفعلي (FEFO) لو موجود، وإلا رقم التشغيلة المكتوب (وقد يكون "A + B")
+function bpOrderBatchList(o){
+  if(!o)return[];
+  let raw=[];
+  if(Array.isArray(o.fefoDispense)&&o.fefoDispense.length)raw=o.fefoDispense.map(d=>d.batch);
+  else if((o.batch||'').trim())raw=String(o.batch).split(/\s+\+\s+/);
+  const seen=new Set(),out=[];
+  raw.forEach(b=>{b=String(b||'').trim();if(!b)return;const n=bpNorm(b);if(seen.has(n))return;seen.add(n);out.push(b);});
+  return out;
+}
+// تشغيلات مجموعة أوردرات بترتيب ظهورها في الإذن، من غير تكرار — وأي تشغيلة مش في الأوردرات دي مش هتظهر أبدًا
+function bpEntriesFromOrders(orders){
+  const seen=new Set(),entries=[];let noBatch=0;
+  (orders||[]).forEach(o=>{
+    const ic=(o.icode||'').trim();
+    const bl=ic?bpOrderBatchList(o):[];
+    if(!bl.length){noBatch++;return;}
+    bl.forEach(b=>{
+      const key=bpKey(ic,b);if(seen.has(key))return;seen.add(key);
+      entries.push({key,icode:ic,batch:b,iname:o.iname||(fi(ic)||{}).name||''});
+    });
+  });
+  return{entries,noBatch};
+}
+function bpRelSig(entries){return entries.map(e=>e.key+':'+bpFiles(e.key).map(f=>f.id).join(',')).join('|');}
+
+/* ---------- لوحة "إفراجات التشغيلات" داخل الإذن المجمع (كشف تحرك المندوب) ---------- */
+function bpRelPanelHtml(orders,rn){
+  if(!orders||!orders.length)return'';
+  bpEnsureMeta();
+  const {entries,noBatch}=bpEntriesFromOrders(orders);
+  const sig=BPDF.loaded?bpRelSig(entries):'';
+  BPDF.relCtx={entries,noBatch,rn,sig,date:S.repCalAll?'all':(S.repCalDate||ymd(Date.now()))};
+  if(BPDF.loaded&&entries.length&&(!BPDF.rel||BPDF.rel.sig!==sig)){
+    if(BPDF.rel&&BPDF.rel.url){try{URL.revokeObjectURL(BPDF.rel.url);}catch(_){}}
+    const st={sig,status:'building',done:0,total:entries.length};
+    BPDF.rel=st;
+    const ents=entries.slice();
+    setTimeout(()=>bpRelBuild(st,ents),0); // تجميع تلقائي بعد الرسم مباشرة
+  }
+  return bpRelPanelInner();
+}
+async function bpRelBuild(st,entries){
+  if(BPDF.rel!==st)return; // اتغيّر الإذن أثناء الانتظار
+  try{
+    if(!entries.some(e=>bpFiles(e.key).length)){st.status='empty';bpRelUpdateDom();return;}
+    const r=await bpMergeEntries(entries,(d,t)=>{if(BPDF.rel!==st)return;st.done=d;st.total=t;bpRelUpdateDom();});
+    if(BPDF.rel!==st)return;
+    st.failed=r.failed;st.missing=r.missing;st.included=r.included;st.pages=r.pages;
+    if(r.bytes){st.url=URL.createObjectURL(new Blob([r.bytes],{type:'application/pdf'}));st.size=r.bytes.length;st.status='ready';}
+    else st.status='empty';
+  }catch(e){
+    console.error('bpRelBuild',e);
+    if(BPDF.rel!==st)return;
+    st.status='error';st.err=(e&&e.message)?e.message:'حصل خطأ غير متوقع';
+  }
+  bpRelUpdateDom();
+}
+function bpRelPanelInner(){
+  const c=BPDF.relCtx;if(!c)return'';
+  const st=(BPDF.rel&&BPDF.rel.sig===c.sig)?BPDF.rel:null;
+  const chips=c.entries.map((e,i)=>{
+    const n=BPDF.loaded?bpFiles(e.key).length:0;
+    const bad=!!(st&&st.failed&&st.failed.some(f=>f.key===e.key));
+    return`<span class="bpchip ${bad?'bad':(n?'ok':'no')}" title="${bpEsc(e.iname||e.icode)}">${i+1}. ${bpEsc(e.batch)} ${bad?'⛔':(n?'✅':'⚠️')}</span>`;
+  }).join('');
+  let status='',btns='';
+  const nMissing=BPDF.loaded?c.entries.filter(e=>!bpFiles(e.key).length).length:0;
+  if(!BPDF.loaded){
+    status=BPDF.err?`<span style="color:var(--bad);">⚠️ تعذّر تحميل بيانات ملفات الإفراج (${BPDF.err==='offline'?'لا يوجد اتصال بالإنترنت':'لا توجد صلاحية قراءة'})</span>`:`⏳ جارِ تحميل بيانات ملفات الإفراج...`;
+  }else if(!c.entries.length){
+    status=`لا توجد تشغيلات محددة في أوردرات هذا الإذن حتى الآن`;
+  }else if(!st||st.status==='building'){
+    status=`<span class="spinner" style="display:inline-block;width:13px;height:13px;vertical-align:middle;margin-left:6px;"></span> جارِ تجميع ملفات الإفراج تلقائيًا${st?` (${st.done}/${st.total} تشغيلة)`:''}...`;
+  }else if(st.status==='ready'){
+    status=`✅ تم تجميع إفراجات <b>${st.included.length}</b> تشغيلة في ملف واحد (${st.pages} صفحة — ${bpFmtSize(st.size)}) بنفس ترتيب الإذن`;
+    btns=`<div style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap;">
+      <button type="button" class="bs bgo" data-a="bprelopen">📄 فتح / طباعة PDF الإفراجات</button>
+      <button type="button" class="bs bghost" data-a="breldl">⬇️ تحميل PDF المدمج</button>
+    </div>`;
+  }else if(st.status==='empty'){
+    status=`⚠️ لا توجد ملفات إفراج مرفوعة لأي من تشغيلات هذا الإذن — ارفعها من: الإدارة ← 📄 إفراجات التشغيلات`;
+  }else{
+    status=`<span style="color:var(--bad);">⛔ تعذّر تجميع الملف: ${bpEsc(st.err||'')}</span>`;
+  }
+  const notes=[];
+  if(BPDF.loaded&&nMissing)notes.push(`⚠️ ${nMissing} تشغيلة بدون ملف إفراج (لن تظهر في الملف المدمج)`);
+  if(st&&st.failed&&st.failed.length)notes.push(`⛔ تعذّر قراءة ${st.failed.length} ملف: ${st.failed.map(f=>bpEsc(f.file)).join('، ')}`);
+  if(c.noBatch)notes.push(`ℹ️ ${c.noBatch} أوردر بدون تشغيلة محددة (مثل الصرف التلقائي FEFO قبل التسليم) — غير مُضمَّن`);
+  return`<div id="bpRelPanel" class="no-print" style="max-width:1400px;margin:0 auto 10px;background:#fff;border:1px solid var(--blue2);border-radius:9px;padding:10px 14px;font-size:11.5px;">
+    <div style="font-weight:800;color:var(--blue2);margin-bottom:6px;">📎 إفراجات تشغيلات هذا الإذن (PDF مدمج تلقائيًا)</div>
+    <div style="line-height:1.9;">${status}</div>
+    ${btns}
+    ${notes.length?`<div style="margin-top:7px;font-size:10.5px;color:var(--muted);line-height:1.9;">${notes.join('<br>')}</div>`:''}
+    ${chips?`<div style="margin-top:8px;line-height:2;">${chips}</div>`:''}
+  </div>`;
+}
+function bpRelUpdateDom(){
+  const el=document.getElementById('bpRelPanel');if(!el)return;
+  const tmp=document.createElement('div');tmp.innerHTML=bpRelPanelInner();
+  const n=tmp.firstElementChild;if(!n)return;
+  n.querySelectorAll('[data-a]').forEach(b=>b.addEventListener('click',onA));
+  el.replaceWith(n);
+}
+function bpRelFileName(){
+  const c=BPDF.relCtx||{};
+  return('Releases_'+(c.rn||'')+'_'+(c.date||'')).replace(/[\\\/:*?"<>|\s]+/g,'_')+'.pdf';
+}
+
+/* ---------- التشغيلات المعروفة بالنظام (للإدارة) ---------- */
+function bpKnownBatches(){
+  const map=new Map();
+  const add=(ic,b,exp,nm)=>{
+    ic=(ic||'').trim();b=(b==null?'':String(b)).trim();if(!ic||!b)return;
+    const key=bpKey(ic,b);let r=map.get(key);
+    if(!r){r={key,icode:ic,batch:b,expiry:'',iname:''};map.set(key,r);}
+    if(exp&&!r.expiry)r.expiry=exp;
+    if(nm&&!r.iname)r.iname=nm;
+  };
+  (DB.orders||[]).forEach(o=>{
+    if(o.kind==='addition'&&o.stage!=='rejected')add(o.icode,o.batch,o.expiry,o.iname);
+    else if(o.orderType==='excel')bpOrderBatchList(o).forEach(b=>add(o.icode,b,o.expiry,o.iname));
+  });
+  Object.keys(DB.balances||{}).forEach(k=>{const p=k.split('|');if(p[2])add(p[1],p[2]);});
+  Object.values(BPDF.meta||{}).forEach(m=>{if(m)add(m.icode,m.batch,'',m.iname);});
+  if(S.bpManual)add(S.bpManual.icode,S.bpManual.batch,'',S.bpManual.iname);
+  const rows=[...map.values()];
+  rows.forEach(r=>{
+    if(!r.iname){const it=fi(r.icode);r.iname=it?it.name:'';}
+    r.n=bpFiles(r.key).length;
+  });
+  rows.sort((a,b)=>(a.iname||a.icode).localeCompare(b.iname||b.icode,'ar')||a.batch.localeCompare(b.batch,'ar'));
+  return rows;
+}
+function bpListRows(){
+  const all=bpKnownBatches();
+  const q=xh(S.bpSearch||'').toLowerCase();
+  const filt=S.bpFilter||'all';
+  let rows=all.filter(r=>!q||[r.batch,r.icode,r.iname].some(v=>(v||'').toLowerCase().includes(q)));
+  if(filt==='missing')rows=rows.filter(r=>!r.n);else if(filt==='has')rows=rows.filter(r=>r.n>0);
+  return{all,rows};
+}
+
+/* ---------- شاشة الإدارة: رفع وإدارة ملفات إفراج كل تشغيلة + QR ---------- */
+function rAdmBatchPdf(){
+  bpEnsureMeta();
+  if(!FDB)return`<div class="card" style="text-align:center;color:var(--bad);">⚠️ هذه الميزة تحتاج قاعدة بيانات Firebase مُفعّلة</div>`;
+  const {all,rows}=bpListRows();
+  const filt=S.bpFilter||'all';
+  const withPdf=all.filter(r=>r.n>0).length;
+  const sel=S.bpSel?all.find(r=>r.key===S.bpSel):null;
+  const pg=pageSlice(rows,'bpList',30);
+  const fileProto=location.protocol==='file:';
+  return`
+  <div class="card" style="background:var(--blue-lg);border-color:var(--blue);">
+    <div style="font-weight:800;margin-bottom:6px;">📄 ملفات إفراج التشغيلات (Batch Release)</div>
+    <div style="font-size:11.5px;line-height:1.9;color:var(--muted);">ارفع ملف/ملفات PDF الإفراج لكل تشغيلة. كل تشغيلة لها QR خاص يفتح ملفاتها مباشرة، وعند فتح أي إذن مجمع بيتم تجميع إفراجات تشغيلات الإذن فقط في PDF واحد تلقائيًا.</div>
+    ${fileProto?`<div style="margin-top:8px;font-size:11.5px;font-weight:700;color:var(--bad);">⚠️ النظام مفتوح كملف محلي — كود الـ QR مش هيشتغل من الموبايل. افتح النظام من الرابط المنشور (https) قبل طباعة الأكواد.</div>`:''}
+    ${BPDF.err?`<div style="margin-top:8px;font-size:11.5px;font-weight:700;color:var(--bad);">⚠️ تعذّر تحميل بيانات الملفات (${BPDF.err==='offline'?'لا يوجد اتصال بالإنترنت':'راجع قواعد الأمان في Firebase للمسارين ift_bpdf_meta و ift_bpdf_data'})</div>`:''}
+  </div>
+  ${sel?rBpDetail(sel):''}
+  <div class="slabel">📦 التشغيلات (${all.length}) — منها ${withPdf} لها ملف إفراج</div>
+  <div class="pillbar">
+    <button type="button" data-a="bpfilter" data-f="all" class="${filt==='all'?'on':''}">الكل (${all.length})</button>
+    <button type="button" data-a="bpfilter" data-f="missing" class="${filt==='missing'?'on':''}">⚠️ بدون ملف (${all.length-withPdf})</button>
+    <button type="button" data-a="bpfilter" data-f="has" class="${filt==='has'?'on':''}">✅ لها ملف (${withPdf})</button>
+  </div>
+  <div class="field"><input type="text" id="bpSearch" placeholder="🔍 بحث برقم التشغيلة / كود أو اسم الصنف" value="${bpEsc(S.bpSearch||'')}"></div>
+  <details style="margin-bottom:10px;">
+    <summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--blue2);">➕ تسجيل تشغيلة يدويًا (لم تُسجَّل بالنظام بعد)</summary>
+    <form id="bpmanf" style="margin-top:8px;">
+      <div class="field"><label>كود الصنف</label><input name="icode" placeholder="كود الصنف كما هو بالنظام" required></div>
+      <div class="field"><label>رقم التشغيلة</label><input name="batch" placeholder="رقم التشغيلة (Batch)" required></div>
+      <button class="btn-primary" type="submit" style="max-width:none;">متابعة لرفع الملف</button>
+    </form>
+  </details>
+  ${rows.length?`<button type="button" class="bs bghost" style="width:100%;margin-bottom:10px;" data-a="bpprintall">🖨️ طباعة ملصقات QR للتشغيلات المعروضة (${Math.min(rows.length,300)})</button>`:''}
+  ${pg.rows.length?pg.rows.map(r=>`<div class="card" style="padding:10px 12px;margin-bottom:8px;${S.bpSel===r.key?'border-color:var(--blue2);':''}">
+    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;">
+      <div style="min-width:0;flex:1;">
+        <div style="font-weight:800;font-size:12.5px;word-break:break-all;">📦 ${bpEsc(r.batch)}</div>
+        <div style="font-size:11px;color:var(--muted);">${bpEsc(r.iname||r.icode)} · ${bpEsc(r.icode)}${r.expiry?' · صلاحية '+new Date(r.expiry).toLocaleDateString('ar-EG'):''}</div>
+      </div>
+      <span class="tag ${r.n?'ta':'tw'}">${r.n?'✅ '+r.n+' ملف':'⚠️ بدون إفراج'}</span>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:8px;">
+      <button type="button" class="bs bgo" data-a="bpsel" data-key="${bpEsc(r.key)}">📎 الملفات و QR</button>
+    </div>
+  </div>`).join('')+loadMoreBtn('bpList',pg):`<div class="card" style="text-align:center;color:var(--muted);font-size:12px;">لا توجد تشغيلات مطابقة</div>`}`;
+}
+function rBpDetail(r){
+  const files=bpFiles(r.key);
+  const url=bpUrl(r.icode,r.batch);
+  const up=S.bpUp&&S.bpUp.busy;
+  return`<div class="card" style="border:2px solid var(--blue2);">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px;">
+      <div style="min-width:0;">
+        <div style="font-weight:900;font-size:14px;word-break:break-all;">📦 ${bpEsc(r.batch)}</div>
+        <div style="font-size:11.5px;color:var(--muted);">${bpEsc(r.iname||r.icode)} · ${bpEsc(r.icode)}${r.expiry?' · صلاحية '+new Date(r.expiry).toLocaleDateString('ar-EG'):''}</div>
+      </div>
+      <button type="button" class="bs bghost" style="flex:0 0 auto;padding:6px 12px;" data-a="bpclose">✖ إغلاق</button>
+    </div>
+    <div class="slabel" style="margin-top:4px;">📄 ملفات الإفراج (${files.length})</div>
+    ${files.length?files.map(f=>`<div class="bpfile">
+      <span class="nm">📄 ${bpEsc(f.name||'ملف')}<div style="font-size:10px;font-weight:600;color:var(--muted);">${bpFmtSize(f.size)}${f.pages?' · '+f.pages+' صفحة':''}${f.at?' · '+new Date(f.at).toLocaleDateString('ar-EG'):''}${f.byName?' · '+bpEsc(f.byName):''}</div></span>
+      <button type="button" class="bs bgo" data-a="bpview" data-key="${bpEsc(r.key)}" data-fid="${bpEsc(f.id)}">👁 فتح</button>
+      <button type="button" class="bs bghost" data-a="bpdl" data-key="${bpEsc(r.key)}" data-fid="${bpEsc(f.id)}">⬇️</button>
+      <button type="button" class="bs bghost" style="color:var(--bad);" data-a="bpdel" data-key="${bpEsc(r.key)}" data-fid="${bpEsc(f.id)}">🗑</button>
+    </div>`).join(''):`<div style="font-size:11.5px;color:var(--muted);margin-bottom:8px;">لا توجد ملفات إفراج لهذه التشغيلة بعد</div>`}
+    ${up?`<div class="attachprev" style="margin:8px 0;">⏳ ${bpEsc(S.bpUp.msg||'جارِ الرفع...')}</div>`
+        :`<label class="attachbtn" for="bpfile">➕ رفع ملف / ملفات PDF لهذه التشغيلة</label>
+          <input type="file" id="bpfile" accept="application/pdf,.pdf" multiple style="display:none;">
+          <div style="font-size:10.5px;color:var(--muted);margin:4px 0 8px;">الحد الأقصى ${Math.round(BP_MAX_BYTES/1048576)}MB للملف الواحد — يمكن رفع أكثر من ملف للتشغيلة الواحدة.</div>`}
+    ${S.bpUp&&S.bpUp.result?`<div style="font-size:11.5px;font-weight:700;line-height:1.9;margin:4px 0 8px;">${S.bpUp.result}</div>`:''}
+    <div class="slabel">🔳 كود QR الخاص بالتشغيلة</div>
+    <div style="text-align:center;">
+      <div style="display:inline-block;width:170px;background:#fff;padding:6px;border-radius:8px;border:1px solid var(--line);">${buildQRSvg(url)}</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:6px;direction:ltr;word-break:break-all;">${bpEsc(url)}</div>
+      <div style="font-size:11px;color:${files.length?'var(--ok)':'var(--warn)'};font-weight:700;margin-top:4px;">${files.length?'مسح الكود يفتح ملف الإفراج مباشرة':'الكود جاهز — سيعرض ملف الإفراج بمجرد رفعه'}</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button type="button" class="bs bgo" data-a="bpprint" data-key="${bpEsc(r.key)}">🖨️ طباعة ملصق QR</button>
+      <button type="button" class="bs bghost" data-a="bpcopy" data-url="${bpEsc(url)}">🔗 نسخ الرابط</button>
+    </div>
+  </div>`;
+}
+function bpManualAdd(f){
+  const ic=(f.get('icode')||'').trim(),b=(f.get('batch')||'').trim();
+  if(!ic||!b){toast('⛔ اكتب كود الصنف ورقم التشغيلة');return;}
+  const it=fi(ic);
+  if(!it){toast('⛔ كود الصنف غير موجود بالنظام — تأكد من الكود');return;}
+  S.bpManual={key:bpKey(ic,b),icode:ic,batch:b,iname:it.name||''};
+  S.bpSel=S.bpManual.key;S.bpUp=null;render();
+}
+function bpReadPagesAndValidate(u8){
+  // تحقق إنه PDF سليم وغير محمي بكلمة مرور (وإلا الدمج هيفشل لاحقًا)
+  const head=String.fromCharCode.apply(null,u8.subarray(0,Math.min(1024,u8.length)));
+  if(head.indexOf('%PDF-')<0)return Promise.reject(new Error('الملف ليس PDF صالح'));
+  if(typeof PDFLib==='undefined')return Promise.resolve(0);
+  return PDFLib.PDFDocument.load(u8).then(d=>d.getPageCount()).catch(()=>{throw new Error('الملف تالف أو محمي بكلمة مرور');});
+}
+async function bpUploadFiles(files){
+  const key=S.bpSel;if(!key||!files.length)return;
+  const rec=bpKnownBatches().find(r=>r.key===key);
+  if(!rec){toast('⚠️ اختر التشغيلة أولاً');return;}
+  if(!can(S.user,'adm_batchpdf')){toast('⛔ ليس لديك صلاحية رفع ملفات الإفراج');return;}
+  if(!navigator.onLine){toast('⚠️ لا يوجد اتصال بالإنترنت');return;}
+  let ok=0;const errs=[];
+  for(let i=0;i<files.length;i++){
+    const file=files[i];
+    S.bpUp={busy:true,msg:`جارِ رفع ${file.name} (${i+1}/${files.length})...`};render();
+    try{
+      if(!/\.pdf$/i.test(file.name)&&file.type!=='application/pdf')throw new Error('ليس ملف PDF');
+      if(file.size>BP_MAX_BYTES)throw new Error('الحجم أكبر من '+Math.round(BP_MAX_BYTES/1048576)+'MB');
+      const u8=new Uint8Array(await file.arrayBuffer());
+      const pages=await bpReadPagesAndValidate(u8);
+      const b64=bpBytesToB64(u8);
+      const fid=uid('f');
+      await ensureFirebaseAuth();
+      // نكتب المحتوى الأول ثم البيانات الوصفية — عشان ما يظهرش ملف في القائمة ومحتواه مش موجود
+      await withTimeout(FDB.ref(ROOT+'ift_bpdf_data/'+key+'/'+fid).set(b64),120000,'bpupload');
+      const upd={icode:rec.icode,batch:rec.batch,iname:rec.iname||''};
+      upd['files/'+fid]={name:file.name,size:file.size,pages:pages||0,at:Date.now(),by:S.user?S.user.username:'',byName:S.user?S.user.name:''};
+      await withTimeout(FDB.ref(ROOT+'ift_bpdf_meta/'+key).update(upd),30000,'bpmeta');
+      ok++;
+    }catch(e){
+      console.error('bp upload',e);
+      errs.push(bpEsc(file.name)+': '+bpEsc((e&&e.message)?e.message:'فشل الرفع'));
+    }
+  }
+  S.bpUp={busy:false,result:(ok?`✅ تم رفع ${ok} ملف وربطه بالتشغيلة`:'')+(errs.length?`<br><span style="color:var(--bad);">⛔ تعذّر: ${errs.join(' | ')}</span>`:'')};
+  render();
+}
+async function bpDeleteFileUI(key,fid){
+  if(!can(S.user,'adm_batchpdf')){toast('⛔ ليس لديك صلاحية حذف ملفات الإفراج');return;}
+  const f=bpFiles(key).find(x=>x.id===fid);
+  if(!confirm('حذف ملف الإفراج "'+((f&&f.name)||'')+'" من هذه التشغيلة؟'))return;
+  try{
+    await ensureFirebaseAuth();
+    await withTimeout(FDB.ref(ROOT+'ift_bpdf_meta/'+key+'/files/'+fid).remove(),20000,'bpdel');
+    await withTimeout(FDB.ref(ROOT+'ift_bpdf_data/'+key+'/'+fid).remove(),20000,'bpdel');
+    if(!bpFiles(key).some(x=>x.id!==fid))await withTimeout(FDB.ref(ROOT+'ift_bpdf_meta/'+key).remove(),20000,'bpdel');
+    BPDF.bytes.delete(key+'|'+fid);
+    toast('🗑 تم حذف الملف');
+  }catch(e){toast('⚠️ تعذّر الحذف: '+(e&&e.message?e.message:''));}
+}
+function bpPrintLabels(items){
+  if(!items||!items.length){toast('⚠️ لا توجد تشغيلات للطباعة');return;}
+  const cards=items.slice(0,300).map(r=>`<div class="lb"><div class="q">${buildQRSvg(bpUrl(r.icode,r.batch))}</div><div class="t"><b>${bpEsc(r.batch)}</b><span>${bpEsc(r.iname||r.icode)}</span><span>${bpEsc(r.icode)}${r.expiry?' · '+new Date(r.expiry).toLocaleDateString('ar-EG'):''}</span></div></div>`).join('');
+  const html=`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>ملصقات QR للتشغيلات</title><style>
+    *{box-sizing:border-box;margin:0;padding:0;}body{font-family:Cairo,Tahoma,Arial,sans-serif;padding:8mm;color:#0B2E5C;}
+    .g{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;}
+    .lb{border:1px dashed #999;border-radius:3mm;padding:3mm;display:flex;gap:3mm;align-items:center;page-break-inside:avoid;}
+    .q{width:26mm;height:26mm;flex:0 0 26mm;}.q svg{width:100%;height:100%;}
+    .t{display:flex;flex-direction:column;gap:1mm;font-size:9pt;min-width:0;}.t b{font-size:11pt;word-break:break-all;}.t span{font-size:8pt;color:#444;word-break:break-word;}
+    @media print{body{padding:0;}}
+  </style></head><body><div class="g">${cards}</div></body></html>`;
+  const w=window.open('','_blank');
+  if(!w){toast('⛔ المتصفح منع نافذة الطباعة — اسمح بالنوافذ المنبثقة لهذا الموقع');return;}
+  w.document.open();w.document.write(html);w.document.close();
+  setTimeout(()=>{try{w.focus();w.print();}catch(_){}},600);
+}
+function bpCopy(text){
+  const fallback=()=>{try{prompt('انسخ الرابط:',text);}catch(_){}};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(text).then(()=>toast('✅ تم نسخ الرابط'),fallback);else fallback();
+}
+// رابط ملف الإفراج داخل تفاصيل الأوردر (لو التشغيلة لها ملف)
+function bpOrderLinkHtml(o){
+  const list=bpOrderBatchList(o);if(!list.length)return'';
+  bpEnsureMeta();if(!BPDF.loaded)return'';
+  const ic=(o.icode||'').trim();
+  const btns=list.map(b=>{
+    const k=bpKey(ic,b),n=bpFiles(k).length;
+    return n?`<button type="button" class="bs bghost" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" data-a="bporder" data-key="${bpEsc(k)}" data-ic="${bpEsc(ic)}" data-b="${bpEsc(b)}">📄 إفراج ${bpEsc(b)}</button>`:'';
+  }).filter(Boolean);
+  if(!btns.length)return'';
+  return`<div class="kv" style="flex-wrap:wrap;gap:6px;"><span>ملف الإفراج</span><span style="display:flex;gap:6px;flex-wrap:wrap;">${btns.join('')}</span></div>`;
+}
+
+/* ---------- ربط أحداث الشاشة (رفع الملفات، البحث، إضافة يدوية) ---------- */
+function bpBind(){
+  const inp=document.getElementById('bpfile');
+  if(inp)inp.addEventListener('change',()=>{const fs=[...inp.files];inp.value='';if(fs.length)bpUploadFiles(fs);});
+  const se=document.getElementById('bpSearch');
+  if(se)se.addEventListener('input',()=>{
+    S.bpSearch=se.value;S.pageShow.bpList=undefined;
+    debouncedRender(()=>{render();const e2=document.getElementById('bpSearch');if(e2){e2.focus();e2.selectionStart=e2.selectionEnd=e2.value.length;}});
+  });
+  const mf=document.getElementById('bpmanf');
+  if(mf)mf.addEventListener('submit',ev=>{ev.preventDefault();bpManualAdd(new FormData(mf));});
+}
+// يرجّع true لو الإجراء يخص هذه الميزة
+function bpHandleAction(a,el){
+  const d=el.dataset;
+  switch(a){
+    case'bpsel':S.bpSel=d.key;S.bpUp=null;render();return true;
+    case'bpclose':S.bpSel=null;S.bpManual=null;S.bpUp=null;render();return true;
+    case'bpfilter':S.bpFilter=d.f;S.pageShow.bpList=undefined;render();return true;
+    case'bpview':bpOpenFile(d.key,d.fid);return true;
+    case'bpdl':bpDownloadFile(d.key,d.fid);return true;
+    case'bpdel':bpDeleteFileUI(d.key,d.fid);return true;
+    case'bpprint':{const r=bpKnownBatches().find(x=>x.key===d.key);if(r)bpPrintLabels([r]);return true;}
+    case'bpprintall':bpPrintLabels(bpListRows().rows);return true;
+    case'bpcopy':bpCopy(d.url);return true;
+    case'bporder':bpOpenEntries([{key:d.key,icode:d.ic,batch:d.b}]);return true;
+    case'bprelopen':{
+      const st=BPDF.rel;if(!st||!st.url){toast('⏳ الملف لسه بيتجمّع...');return true;}
+      const w=window.open(st.url,'_blank');if(!w)bpDownloadBlob(st.url,bpRelFileName());
+      return true;}
+    case'breldl':{
+      const st=BPDF.rel;if(!st||!st.url){toast('⏳ الملف لسه بيتجمّع...');return true;}
+      bpDownloadBlob(st.url,bpRelFileName());return true;}
+    case'bpvopen':bpOpenFile(S.bpView.key,d.fid);return true;
+    case'bpvdl':bpDownloadFile(S.bpView.key,d.fid);return true;
+    case'bpropen':{const u=S.bpView&&S.bpView.blobUrl;if(u){if(!window.open(u,'_blank'))location.href=u;}return true;}
+    case'bpvapp':location.href=location.origin+location.pathname;return true;
+  }
+  return false;
+}
+
+/* ---------- الرابط العام لكود QR الخاص بالتشغيلة: ?batchpdf=1&i=كود الصنف&b=رقم التشغيلة ---------- */
+function bpInitFromUrl(){
+  try{
+    const qs=new URLSearchParams(location.search);
+    if(qs.get('pubrel')==='1'&&qs.get('rep')){
+      S.bpView={mode:'rel',rep:qs.get('rep'),date:qs.get('date')||'all',status:'loading',msg:'جارِ تحميل بيانات الإذن...',files:[],blobUrl:'',err:''};
+      return;
+    }
+    if(qs.get('batchpdf')!=='1')return;
+    const ic=(qs.get('i')||'').trim(),b=(qs.get('b')||'').trim();
+    if(!ic||!b)return;
+    S.bpView={key:bpKey(ic,b),icode:ic,batch:b,iname:'',status:'loading',files:[],cur:null,blobUrl:'',busy:false,err:''};
+  }catch(e){/* رابط غير سليم — نكمل تشغيل التطبيق عادي */}
+}
+async function bpPublicLoad(){
+  const v=S.bpView;if(!v)return;
+  try{
+    if(!FDB)throw new Error('قاعدة البيانات غير مُعدّة');
+    if(!navigator.onLine)throw new Error('لا يوجد اتصال بالإنترنت');
+    await ensureFirebaseAuth();
+    const snap=await withTimeout(FDB.ref(ROOT+'ift_bpdf_meta/'+v.key).once('value'),20000,'bpmeta');
+    const m=snap.val();
+    if(m)BPDF.meta[v.key]=m;
+    v.files=bpFiles(v.key);
+    v.iname=(m&&m.iname)||'';
+    v.status=v.files.length?'ready':'none';
+    v.cur=v.files.length?v.files[0].id:null;
+    render();
+    if(v.files.length)bpViewerLoad(v.cur,true);
+  }catch(e){
+    console.error('bpPublicLoad',e);
+    v.status='error';v.err=(e&&e.message)?e.message:'حصل خطأ غير متوقع';render();
+  }
+}
+async function bpViewerLoad(fid,auto){
+  const v=S.bpView;if(!v)return;
+  const mobile=bpIsMobile();
+  if(mobile&&!auto)return; // على الموبايل الفتح بيتم بالأزرار (نافذة PDF المدمجة بالمتصفح)
+  v.busy=true;render();
+  try{
+    const u8=await bpGetBytes(v.key,fid);
+    const url=URL.createObjectURL(new Blob([u8],{type:'application/pdf'}));
+    v.blobUrl=url;v.busy=false;
+    if(mobile&&v.files.length===1){
+      // فتح تلقائي مرة واحدة لكل جلسة — لو رجع للخلف يشوف الصفحة والأزرار بدل ما يتحوّل تاني
+      const flag='bpauto_'+v.key;let done=false;
+      try{done=!!sessionStorage.getItem(flag);}catch(_){}
+      if(!done){try{sessionStorage.setItem(flag,'1');}catch(_){}location.href=url;return;}
+    }
+    render();
+  }catch(e){v.busy=false;v.err=(e&&e.message)?e.message:'تعذّر تحميل الملف';render();}
+}
+/* ---------- QR أسفل الإذن المجمع: يفتح PDF إفراجات تشغيلات الإذن (نفس التشغيلات والترتيب) ---------- */
+function bpRelShareUrl(rn){
+  const date=S.repCalAll?'all':(S.repCalDate||ymd(Date.now()));
+  return bpBaseUrl()+'?pubrel=1&rep='+encodeURIComponent(rn)+'&date='+encodeURIComponent(date);
+}
+// نفس أوردرات وترتيب كشف تحرك المندوب المعروض (نفس الفلترة وترتيب أقرب مسافة)
+function bpManifestOrders(rn){
+  S.repSearch='';
+  const myOrds=repOrdsFiltered(rn).filter(o=>['pending_rep','with_rep'].includes(o.stage));
+  if(S.mfRouteOpt===false)return myOrds;
+  const stopsMap={};
+  myOrds.forEach(o=>{
+    const k=o.ccode||o.cname||'?';
+    if(!stopsMap[k])stopsMap[k]={ccode:o.ccode,cname:o.cname,loc:bestCustLoc(o.ccode)?.loc||null,orders:[]};
+    stopsMap[k].orders.push(o);
+  });
+  const res=optimizeRoute(Object.values(stopsMap));
+  const out=[];res.ordered.forEach(s=>s.orders.forEach(o=>out.push(o)));
+  return out;
+}
+async function bpRelPublicLoad(){
+  const v=S.bpView;if(!v||v.mode!=='rel')return;
+  try{
+    if(!navigator.onLine)throw new Error('لا يوجد اتصال بالإنترنت');
+    if(v.date==='all'){S.repCalAll=true;}else{S.repCalAll=false;S.repCalDate=v.date;}
+    const orders=bpManifestOrders(v.rep);
+    const {entries,noBatch}=bpEntriesFromOrders(orders);
+    v.total=entries.length;v.noBatch=noBatch;
+    if(!orders.length){v.status='none';v.msg='لا توجد أوردرات حالية لهذا الإذن (ربما تم تسليمها أو تغيّر الإذن)';render();return;}
+    if(!entries.length){v.status='none';v.msg='لا توجد تشغيلات محددة في أوردرات هذا الإذن';render();return;}
+    v.status='building';v.msg='جارِ تجميع ملفات الإفراج...';render();
+    await ensureFirebaseAuth();
+    const snap=await withTimeout(FDB.ref(ROOT+'ift_bpdf_meta').once('value'),20000,'bpmeta');
+    BPDF.meta=snap.val()||{};BPDF.loaded=true;
+    const r=await bpMergeEntries(entries,(d,t)=>{v.msg='جارِ تجميع ملفات الإفراج... ('+d+'/'+t+')';render();});
+    v.missing=r.missing;v.included=r.included;v.failed=r.failed;v.pages=r.pages;
+    if(!r.bytes){v.status='none';v.msg='لا توجد ملفات إفراج مرفوعة لتشغيلات هذا الإذن';render();return;}
+    const url=URL.createObjectURL(new Blob([r.bytes],{type:'application/pdf'}));
+    v.blobUrl=url;v.status='ready';v.size=r.bytes.length;
+    if(bpIsMobile()){
+      const flag='bprel_'+v.rep+'_'+v.date;let done=false;
+      try{done=!!sessionStorage.getItem(flag);}catch(_){}
+      if(!done){try{sessionStorage.setItem(flag,'1');}catch(_){}location.href=url;return;}
+    }
+    render();
+  }catch(e){
+    console.error('bpRelPublicLoad',e);
+    v.status='error';v.err=(e&&e.message)?e.message:'حصل خطأ غير متوقع';render();
+  }
+}
+function rBpRelViewer(){
+  const v=S.bpView;let body='';
+  if(v.status==='loading'||v.status==='building'){
+    body=`<div style="text-align:center;padding:26px 0;"><div class="spinner" style="margin:0 auto 14px;"></div><div style="font-size:13px;font-weight:700;color:var(--muted);">${bpEsc(v.msg||'')}</div></div>`;
+  }else if(v.status==='error'){
+    body=`<div style="background:var(--bad-bg);border:1.5px solid var(--bad);border-radius:11px;padding:14px;text-align:center;color:var(--bad);font-weight:700;font-size:12.5px;line-height:1.9;">⛔ تعذّر تجميع الإفراجات<br><span style="font-weight:600;">${bpEsc(v.err)}</span></div>`;
+  }else if(v.status==='none'){
+    body=`<div style="background:var(--warn-bg);border:1.5px solid var(--warn);border-radius:11px;padding:14px;text-align:center;color:var(--warn);font-weight:700;font-size:12.5px;line-height:1.9;">⚠️ ${bpEsc(v.msg||'')}</div>`;
+  }else{
+    const fname=('Releases_'+v.rep+'_'+v.date).replace(/[\\\/:*?"<>|\s]+/g,'_')+'.pdf';
+    body=`<div class="card" style="margin-bottom:10px;">
+      <div class="kv"><span>عدد التشغيلات المُضمَّنة</span><b>${(v.included||[]).length}</b></div>
+      <div class="kv"><span>عدد الصفحات</span><b>${v.pages}</b></div>
+      ${(v.missing&&v.missing.length)?`<div style="font-size:11px;color:var(--warn);font-weight:700;margin-top:6px;line-height:1.9;">⚠️ بدون ملف إفراج: ${v.missing.map(e=>bpEsc(e.batch)).join('، ')}</div>`:''}
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="bs bgo" data-a="bpropen">📄 فتح PDF الإفراجات</button>
+      <a class="bs bghost" style="text-decoration:none;display:block;" href="${v.blobUrl}" download="${bpEsc(fname)}">⬇️ تحميل</a>
+    </div>
+    ${(!bpIsMobile())?`<iframe src="${v.blobUrl}" style="width:100%;height:68vh;border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:10px;"></iframe>`:''}`;
+  }
+  return`<div style="flex:1;overflow-y:auto;padding:18px 14px 30px;background:linear-gradient(180deg,#F0F6FF 0%,var(--paper) 220px);">
+    <div style="max-width:720px;margin:0 auto;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <img src="${LOGO}" alt="IFT" style="width:52px;height:52px;border-radius:12px;background:#fff;padding:4px;object-fit:contain;box-shadow:var(--sh);">
+        <div><div style="font-weight:900;font-size:16px;">إفراجات الإذن المجمع</div><div style="font-size:11px;color:var(--muted);">🧍 ${bpEsc(v.rep)}${v.date==='all'?'':' — '+bpEsc(v.date)}</div></div>
+      </div>
+      ${body}
+      <button type="button" class="bs bghost" style="width:100%;margin-top:14px;" data-a="bpvapp">🏠 فتح نظام بضاعة الأمانة</button>
+    </div>
+  </div>`;
+}
+function rBatchPdfViewer(){
+  if(S.bpView&&S.bpView.mode==='rel')return rBpRelViewer();
+  const v=S.bpView;
+  let body='';
+  if(v.status==='loading'){
+    body=`<div style="text-align:center;padding:26px 0;"><div class="spinner" style="margin:0 auto 14px;"></div><div style="font-size:13px;font-weight:700;color:var(--muted);">جارِ تحميل ملف الإفراج...</div></div>`;
+  }else if(v.status==='error'){
+    body=`<div style="background:var(--bad-bg);border:1.5px solid var(--bad);border-radius:11px;padding:14px;text-align:center;color:var(--bad);font-weight:700;font-size:12.5px;line-height:1.9;">⛔ تعذّر تحميل ملف الإفراج<br><span style="font-weight:600;">${bpEsc(v.err)}</span></div>`;
+  }else if(v.status==='none'){
+    body=`<div style="background:var(--warn-bg);border:1.5px solid var(--warn);border-radius:11px;padding:14px;text-align:center;color:var(--warn);font-weight:700;font-size:12.5px;line-height:1.9;">⚠️ لم يتم رفع ملف إفراج لهذه التشغيلة بعد</div>`;
+  }else{
+    body=`${v.files.map(f=>`<div class="bpfile">
+      <span class="nm">📄 ${bpEsc(f.name||'ملف')}<div style="font-size:10px;font-weight:600;color:var(--muted);">${bpFmtSize(f.size)}${f.pages?' · '+f.pages+' صفحة':''}</div></span>
+      <button type="button" class="bs bgo" data-a="bpvopen" data-fid="${bpEsc(f.id)}">📄 فتح</button>
+      <button type="button" class="bs bghost" data-a="bpvdl" data-fid="${bpEsc(f.id)}">⬇️ تحميل</button>
+    </div>`).join('')}
+    ${v.busy?`<div style="text-align:center;padding:14px 0;font-size:12px;color:var(--muted);">⏳ جارِ تجهيز الملف...</div>`:''}
+    ${v.err?`<div style="color:var(--bad);font-size:12px;font-weight:700;margin-top:8px;">⚠️ ${bpEsc(v.err)}</div>`:''}
+    ${(!bpIsMobile()&&v.blobUrl)?`<iframe src="${v.blobUrl}" style="width:100%;height:68vh;border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:10px;"></iframe>`:''}`;
+  }
+  return`<div style="flex:1;overflow-y:auto;padding:18px 14px 30px;background:linear-gradient(180deg,#F0F6FF 0%,var(--paper) 220px);">
+    <div style="max-width:720px;margin:0 auto;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <img src="${LOGO}" alt="IFT" style="width:52px;height:52px;border-radius:12px;background:#fff;padding:4px;object-fit:contain;box-shadow:var(--sh);">
+        <div><div style="font-weight:900;font-size:16px;">إفراج التشغيلة</div><div style="font-size:10px;letter-spacing:2px;color:var(--muted);">IFT CORPORATION</div></div>
+      </div>
+      <div class="card" style="margin-bottom:12px;">
+        <div class="kv"><span>رقم التشغيلة</span><b style="word-break:break-all;">${bpEsc(v.batch)}</b></div>
+        <div class="kv"><span>الصنف</span><b>${bpEsc(v.iname?v.iname+' — '+v.icode:v.icode)}</b></div>
+      </div>
+      ${body}
+      <button type="button" class="bs bghost" style="width:100%;margin-top:14px;" data-a="bpvapp">🏠 فتح نظام بضاعة الأمانة</button>
+    </div>
+  </div>`;
+}
+
 async function retryLoadUsers(){
   dbReady=false;render();
   if(IS_CONFIGURED)await ensureFirebaseAuth();
@@ -2534,7 +3207,8 @@ function render(){
   applyNight();
   const app=document.getElementById('app');
   let h='';
-  if(S.printRep)h=rManifest(S.printRep);
+  if(S.bpView)h=rBatchPdfViewer();
+  else if(S.printRep)h=rManifest(S.printRep);
   else if(S.screen==='setup')h=rSetup();
   else if(S.screen==='welcome')h=rWel();
   else if(S.screen==='signin')h=rSI();
@@ -2560,6 +3234,7 @@ function render(){
   }
   if(S.toast){const t=document.createElement('div');t.className='toast';t.textContent=S.toast;app.appendChild(t);}
   bind();
+  bpBind();
 }
 
 function rSetup(){
@@ -3515,6 +4190,7 @@ function rManifest(rn){
       ${totalWeight>0?`⚖️ إجمالي الوزن التقديري لهذا الإذن المجمع: <b>${(Math.round(totalWeight*100)/100)} كجم</b>`:''}
       ${coldTemps.length?`<br>🌡️ تنبيه: يوجد بضاعة ${coldTemps.map(t=>fmtStorageTemp(t)).join(' / ')} — لازم تتنقل وتتخزن بعربية/تبريد مناسبة`:''}
     </div>`:''}
+    ${bpRelPanelHtml(orderedOrds,rn)}
     <div class="mpaper">
       <div class="mhead">
         <div class="mh-l">
@@ -3558,8 +4234,8 @@ function rManifest(rn){
         <div class="sigbox"><div class="sigline">توقيع المسؤول</div></div>
       </div>
       <div class="mqr" style="text-align:center;margin-top:18px;padding-top:14px;border-top:1px dashed var(--line);">
-        <div style="display:inline-block;width:104px;">${buildQRSvg(manifestShareUrl(rn))}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:6px;">📱 امسح الكود بالموبايل لعرض/حفظ نسخة PDF كاملة من هذا الإذن المجمع في أي وقت</div>
+        <div style="display:inline-block;width:104px;">${buildQRSvg(bpRelShareUrl(rn))}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:6px;">📱 امسح الكود بالموبايل لفتح ملف PDF واحد يضم إفراجات التشغيلات الموجودة في هذا الإذن</div>
       </div>
     </div>
   </div>`;
@@ -4108,6 +4784,7 @@ function rOrd(){
     <div class="kv"><span>الكمية المطلوبة</span><b>${o.qty}${o.unit?' '+o.unit:''}</b></div>
     ${isAmanah?`<div class="kv"><span>الرصيد المتبقي</span><b style="color:${bal>0?'var(--ok)':'var(--bad)'}">${bal}</b></div>`:''}
     <div class="kv"><span>الباتش</span><b>${o.batch||'-'}</b></div>
+    ${bpOrderLinkHtml(o)}
     ${isAmanah?`<div class="kv"><span>الكونتر / الدور</span><b>${o.counterName||o.counterCode||'-'}</b></div>
     <div class="kv"><span>المعمل الحالي</span><b>🏭 ${o.labName||'-'}</b></div>
     ${o.labHistory&&o.labHistory.length?`<div class="kv"><span>سجل تحويل المعمل</span><b style="font-size:11px;">${o.labHistory.map(h=>`${h.from}→${h.to}`).join(' | ')}</b></div>`:''}
@@ -4371,6 +5048,7 @@ const ADM_TABS=[
   {k:'cars',l:'🚗 سيارات'},
   {k:'import',l:'📥 استيراد'},
   {k:'archive',l:'🗄️ الأرشيف'},
+  {k:'batchpdf',l:'📄 إفراجات التشغيلات'},
 ];
 function rAdm(){
   const u=S.user;
@@ -4386,6 +5064,7 @@ function rAdm(){
     t==='counters'?rAdmCounters():
     t==='cars'?rAdmCars():
     t==='import'?rAdmImport():
+    t==='batchpdf'?rAdmBatchPdf():
     t==='archive'?rAdmArchive():`<div class="empty">لا توجد أقسام إدارية مُتاحة لك حاليًا</div>`
   );
   return`
@@ -5307,13 +5986,14 @@ function onA(e){
 function onAInner(e){
   const el=e.currentTarget,a=el.dataset.a,id=el.dataset.id;
   // إجراءات تنقّل بسيطة لا تحتاج قفل — الباقي (حفظ/موافقة/رفض/تنفيذ...) يُمنع تكراره أثناء التنفيذ
-  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','edititem','admtab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen','consaddunit','consrmunit','consdiscard','restorecancel','archivenow','archivecancel']);
+  const navActions=new Set(['theme','go-si','logout','tab','stype','wtype','flt','clf','open','back','rrng','cntlog','n2per','labcnt','notif','notifclose','notifitem','notifperm','calday','calweek','calall','music','printrep','back-manifest','pdf','edituser','repgrp','editlab','edititem','admtab','labaddcust','labrmcust','xls-continue','xls-back','xls-cancel','repcalall','repbox','loadmore','baldetail','back-baldetail','retryload','mfroute','editview','editpickorder','editpickbatch','editclearsel','editmarkread','notifeditopen','consaddunit','consrmunit','consdiscard','restorecancel','archivenow','archivecancel','bpsel','bpclose','bpfilter','bpview','bpdl','bpprint','bpprintall','bpcopy','bporder','bprelopen','breldl','bpvopen','bpvdl','bpvapp','bpropen']);
   if(!navActions.has(a)){
     if(_actionLock)return;
     _actionLock=true;
     try{el.disabled=true;el.style.opacity='.55';el.style.pointerEvents='none';}catch(_){}
     setTimeout(()=>{_actionLock=false;},1500);
   }
+  if(bpHandleAction(a,el))return;
   if(a==='theme'){nightMode=!nightMode;localStorage.setItem(NIGHT_KEY,nightMode?'1':'0');_lastBGTab=null;render();}
   else if(a==='go-si'){S.screen='signin';S.err='';render();}
   else if(a==='retryload'){retryLoadUsers();}
