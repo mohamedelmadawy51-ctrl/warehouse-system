@@ -2117,10 +2117,20 @@ async function xlsConfirmImport(){
     newSectorNames.forEach(sn=>DB.sectors.push({code:sn,name:sn}));
     await svs();
   }
+  // منع تكرار الاستيراد: بنبني مفتاح لكل صف. لو نفس الصف (نفس الإذن/الصنف/التشغيلة/العميل/الكمية) اتكرر أكتر من مرة
+  // جوه نفس الملف، ده معناه فاتورة واحدة معمولة على أكتر من لين وهتتوزع على مناطق مختلفة — فلازم كل تكرار يتسحب.
+  // عشان كده التكرار رقم 2 و3... بياخد لاحقة (#2, #3) في مفتاحه، والتكرار الأول بيفضل بمفتاحه الأصلي.
+  // كده لو رفعت نفس الملف مرتين، كل صف (بنفس ترتيب تكراره) هيتعرف إنه اتسحب قبل كده ومش هيتضاف تاني.
+  const existingKeys=new Set(DB.orders.map(o=>o.xlsImportKey).filter(Boolean));
+  const seenInFile=new Map();
   xlsImp.parsedRows.forEach(row=>{
     if(!row.ccode||!row.icode||!row.qty||row.qty<=0){invalid++;return;}
-    const key=(row.soNo||'')+'|'+row.icode+'|'+(row.batch||'')+'|'+row.ccode+'|'+row.qty;
-    if(DB.orders.some(o=>o.xlsImportKey===key)){dup++;return;}
+    const baseKey=(row.soNo||'')+'|'+row.icode+'|'+(row.batch||'')+'|'+row.ccode+'|'+row.qty;
+    const occ=(seenInFile.get(baseKey)||0)+1;
+    seenInFile.set(baseKey,occ);
+    const key=occ===1?baseKey:baseKey+'#'+occ;
+    if(existingKeys.has(key)){dup++;return;}
+    existingKeys.add(key);
     const repUser=DB.users.find(x=>x.username===xlsImp.repMap[row.rep]);
     const custRec=fc(row.ccode),itemRec=fi(row.icode);
     const sectorRec=DB.sectors.find(s=>xh(s.name)===xh(row.sector));
@@ -2160,7 +2170,7 @@ async function xlsConfirmImport(){
     render();
     return;
   }
-  toast(`✅ تم استيراد ${added} صنف إلى الأذن المجمع`+(needsAssign?` — ${needsAssign} منهم بانتظار تحديد المندوب/السيارة (استخدم 🧠 التوزيع الذكي)`:'')+(dup?` — تخطي ${dup} مكرر`:'')+(invalid?` — تجاهل ${invalid} صف غير مكتمل`:''));
+  toast(`✅ تم استيراد ${added} صنف إلى الأذن المجمع`+(needsAssign?` — ${needsAssign} منهم بانتظار تحديد المندوب/السيارة (استخدم 🧠 التوزيع الذكي)`:'')+(dup?` — تخطي ${dup} صف اتسحب قبل كده`:'')+(invalid?` — تجاهل ${invalid} صف غير مكتمل`:''));
   xlsImp=null;S.pageShow.xlsPreview=undefined;S.tab='home';S.oid=null;render();
   }catch(err){
     console.error('xlsConfirmImport error',err);
